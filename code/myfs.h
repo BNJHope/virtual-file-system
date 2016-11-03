@@ -4,8 +4,33 @@
 #define MY_MAX_FILE_SIZE 1000
 
 typedef struct {
-	
-} MyINode;
+
+	//the path to this file
+	char path[MY_MAX_PATH];
+
+	//the uuid for the location of where the data of this node is located
+	//in the database
+	uuid_t file_data_id;
+
+	//mode of the file
+	mode_t mode
+
+	//user ID
+	uid_t  uid;
+
+	//group ID
+	gid_t  gid;
+
+	//the time of the last modification
+	time_t mtime;
+
+	//the time of the last change to the meta-data
+	time_t ctime;
+
+	//size of the file
+	off_t size;
+
+} FileNode;
 
 typedef struct myfcb{
 	char path[MY_MAX_PATH];
