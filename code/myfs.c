@@ -9,7 +9,6 @@
 #include <fuse.h>
 #include <errno.h>
 #include <fcntl.h>
-
 #include "myfs.h"
 
 // The one and only fcb that this implmentation will have. We'll keep it in memory. A better
@@ -23,10 +22,10 @@ static int myfs_getattr(const char *path, struct stat *stbuf){
 
 	memset(stbuf, 0, sizeof(struct stat));
 	if(strcmp(path, "/")==0){
-		stbuf->st_mode = the_root_fcb.root_mode;
+		stbuf->st_mode = the_root_fcb.mode;
 		stbuf->st_nlink = 2;
-		stbuf->st_uid = the_root_fcb.root_uid;
-		stbuf->st_gid = the_root_fcb.root_gid;
+		stbuf->st_uid = the_root_fcb.uid;
+		stbuf->st_gid = the_root_fcb.gid;
 	}else{
 		if (strcmp(path, the_root_fcb.path) == 0) {
 			stbuf->st_mode = the_root_fcb.mode;
@@ -90,7 +89,7 @@ static int myfs_read(const char *path, char *buf, size_t size, off_t offset, str
 	uint8_t data_block[MY_MAX_FILE_SIZE];
 
 	memset(&data_block, 0, MY_MAX_FILE_SIZE);
-	uuid_t *data_id = &(the_root_fcb.file_data_id);
+	uuid_t *data_id = &(the_root_fcb.data_id);
 	// Is there a data block?
 	if(uuid_compare(zero_uuid,*data_id)!=0){
 		unqlite_int64 nBytes;  //Data length.
@@ -132,7 +131,7 @@ static int myfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 		write_log("myfs_create - ENAMETOOLONG");
 		return -ENAMETOOLONG;
 	}
-	sprintf(the_root_fcb.path,path);
+	sprintf(the_root_fcb.path, path);
 	struct fuse_context *context = fuse_get_context();
 	the_root_fcb.uid=context->uid;
 	the_root_fcb.gid=context->gid;
@@ -186,11 +185,11 @@ static int myfs_write(const char *path, const char *buf, size_t size, off_t offs
 	uint8_t data_block[MY_MAX_FILE_SIZE];
 
 	memset(&data_block, 0, MY_MAX_FILE_SIZE);
-	uuid_t *data_id = &(the_root_fcb.file_data_id);
+	uuid_t *data_id = &(the_root_fcb.data_id);
 	// Is there a data block?
 	if(uuid_compare(zero_uuid,*data_id)==0){
 		// GEnerate a UUID fo rhte data blocl. We'll write the block itself later.
-		uuid_generate(the_root_fcb.file_data_id);
+		uuid_generate(the_root_fcb.data_id);
 	}else{
 		// First we will check the size of the obejct in the store to ensure that we won't overflow the buffer.
 		unqlite_int64 nBytes;  // Data length.

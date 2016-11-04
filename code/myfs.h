@@ -40,15 +40,21 @@ typedef struct {
 
 } file_node;
 
+//collection of key value maps for a directory entry
+typedef struct {
+
+} dir_data;
+
+//key value map for a directory entry
 typedef struct {
 
 	//the path to the file that this
-	char *path;
+	char **path;
 
 	//the uuid of the file_node so that it can be found in the database
-	uuid_t fileNodeId;
+	uuid_t *fileNodeId;
 
-} directory_entry;
+} dir_entry;
 
 typedef struct myfcb{
 	char path[MY_MAX_PATH];
