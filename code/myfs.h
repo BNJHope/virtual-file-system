@@ -1,12 +1,15 @@
 #include "fs.h"
+#include <stdio.h>
+#include <linux/limits.h>
 
-#define MY_MAX_PATH 100
+#define MY_MAX_FILENAME FILENAME_MAX
+#define MY_MAX_PATH PATH_MAX
 #define MY_MAX_FILE_SIZE 1000
 
 typedef struct {
 
 	//the path to this file
-	char path[MY_MAX_PATH];
+	char path*;
 
 	//the uuid for the location of where the data of this node is located
 	//in the database
@@ -30,7 +33,16 @@ typedef struct {
 	//size of the file
 	off_t size;
 
-} FileNode;
+} file_node;
+
+typedef struct {
+
+	//the path to the file that this
+	char *path;
+
+	//the uuid of the file_node so that it can be found in the database
+	uuid_t fileNodeId;
+} directory_entry;
 
 typedef struct myfcb{
 	char path[MY_MAX_PATH];
