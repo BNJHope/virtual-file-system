@@ -1,6 +1,7 @@
 #include "fs.h"
 #include <stdio.h>
 #include <linux/limits.h>
+#include <sys/stat.h>
 
 #define MY_MAX_FILENAME FILENAME_MAX
 #define MY_MAX_PATH PATH_MAX
@@ -9,20 +10,20 @@
 typedef struct {
 
 	//the path to this file
-	char path*;
+	char *path;
 
 	//the uuid for the location of where the data of this node is located
 	//in the database
-	uuid_t file_data_id;
+	uuid_t data_id;
 
 	//mode of the file
-	mode_t mode
+	mode_t mode;
 
 	//user ID
-	uid_t  uid;
+	uid_t uid;
 
 	//group ID
-	gid_t  gid;
+	gid_t gid;
 
 	//the time of the last modification
 	time_t mtime;
@@ -33,6 +34,10 @@ typedef struct {
 	//size of the file
 	off_t size;
 
+	//flag to determine if this is a directory or not
+	//is a flag so only needs to be 1 bit
+	int isDirectory : 1;
+
 } file_node;
 
 typedef struct {
@@ -42,6 +47,7 @@ typedef struct {
 
 	//the uuid of the file_node so that it can be found in the database
 	uuid_t fileNodeId;
+
 } directory_entry;
 
 typedef struct myfcb{
@@ -63,3 +69,7 @@ typedef struct myfcb{
 	mode_t root_mode;	/* protection */
 	time_t root_mtime;	/* time of last modification */
 } MyFCB;
+
+void fetchFCBFromUnqliteStore(uuid_t *data_id, file_node *buffer);
+void storeFCBInUnqliteStore(uuid_t *key_id, file_node *value_addr);
+void updateRootObject();

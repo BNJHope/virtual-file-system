@@ -14,7 +14,7 @@
 
 // The one and only fcb that this implmentation will have. We'll keep it in memory. A better
 // implementation would, at the very least, cache it's root directroy in memory.
-struct myfcb the_root_fcb;
+file_node the_root_fcb;
 
 // Get file and directory attributes (meta-data).
 // Read 'man 2 stat' and 'man 2 chmod'.
@@ -345,53 +345,41 @@ static struct fuse_operations myfs_oper = {
 // and write it to the store. Note that this code is executed outide of fuse. If there is a failure then we have failed toi initlaise the
 // file system so exit with an error code.
 void init_fs(){
-	int rc;
+
 	printf("init_fs\n");
+
 	//Initialise the store.
 	init_store();
+
 	if(!root_is_empty){
+
 		printf("init_fs: root is not empty\n");
 
-		uuid_t *data_id = &(root_object.id);
-
-		unqlite_int64 nBytes;  //Data length.
-		rc = unqlite_kv_fetch(pDb,data_id,KEY_SIZE,NULL,&nBytes);
-		if( rc != UNQLITE_OK ){
-		  error_handler(rc);
-		}
-		if(nBytes!=sizeof(struct myfcb)){
-			printf("Data object has unexpected size. Doing nothing.\n");
-			exit(-1);
-		}
-
 		//Fetch the fcb that the root object points at. We will probably need it.
-		unqlite_kv_fetch(pDb,data_id,KEY_SIZE,&the_root_fcb,&nBytes);
-	}else{
-		printf("init_fs: root is empty\n");
+		fetchFCBFromUnqliteStore( &(root_object.id), &the_root_fcb);
+
+	} else {
+
 		//Initialise and store an empty root fcb.
-		memset(&the_root_fcb, 0, sizeof(struct myfcb));
+		printf("init_fs: root is empty\n");
+		memset(&the_root_fcb, 0, sizeof(file_node));
 
 		//See 'man 2 stat' and 'man 2 chmod'.
-		the_root_fcb.root_mode |= S_IFDIR|S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH;
-		the_root_fcb.root_mtime = time(0);
-		the_root_fcb.root_uid = getuid();
-		the_root_fcb.root_gid = getgid();
+		the_root_fcb.mode |= S_IFDIR|S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH;
+		the_root_fcb.mtime = time(0);
+		the_root_fcb.uid = getuid();
+		the_root_fcb.gid = getgid();
 
 		//Generate a key for the_root_fcb and update the root object.
 		uuid_generate(root_object.id);
 
+		//store the root fcb in the database store
 		printf("init_fs: writing root fcb\n");
-		rc = unqlite_kv_store(pDb,&(root_object.id),KEY_SIZE,&the_root_fcb,sizeof(struct myfcb));
-		if( rc != UNQLITE_OK ){
-   			error_handler(rc);
-		}
+		storeFCBInUnqliteStore(&root_object.id, &the_root_fcb);
 
-		printf("init_fs: writing updated root object\n");
 		//Store root object.
-		rc = write_root();
-	 	if( rc != UNQLITE_OK ){
-   			error_handler(rc);
-		}
+		printf("init_fs: writing updated root object\n");
+		updateRootObject();
 	}
 }
 
@@ -416,4 +404,51 @@ int main(int argc, char *argv[]){
 	shutdown_fs();
 
 	return fuserc;
+}
+
+//fetches a file control block at the id given by the user
+//into the address given by the user.
+void fetchFCBFromUnqliteStore(uuid_t *data_id, file_node *buffer) {
+
+	//tracks the error message returned from when fetching from the unqlite
+	//datastore
+	int rc;
+
+	//number of bytes read back from the database
+	unqlite_int64 nBytes;  //Data length.
+
+	//this checks for errors before carrying out the fetch process
+	//by checking the unqlite return code and also that the number of
+	//bytes returned is the right number expected.
+	rc = unqlite_kv_fetch(pDb,data_id,KEY_SIZE,NULL,&nBytes);
+	if( rc != UNQLITE_OK ){
+	  error_handler(rc);
+	}
+	if(nBytes!=sizeof(file_node)){
+		printf("Data object has unexpected size. Doing nothing.\n");
+		exit(-1);
+	}
+
+	//Fetch the fcb that the root object points at. We will probably need it.
+	unqlite_kv_fetch(pDb,data_id,KEY_SIZE,buffer,&nBytes);
+}
+
+//stores a control block at the given id with the given data
+void storeFCBInUnqliteStore(uuid_t *key_id, file_node *value_addr) {
+
+		int rc = unqlite_kv_store(pDb,key_id,KEY_SIZE,value_addr,sizeof(file_node));
+		if( rc != UNQLITE_OK ){
+   			error_handler(rc);
+		}
+}
+
+//updates the root object
+void updateRootObject() {
+	//write the root object to the database and check for errors
+	int rc = write_root();
+
+	//if the return code shows an error, then handle the error
+	if( rc != UNQLITE_OK ){
+  		error_handler(rc);
+  	}
 }
