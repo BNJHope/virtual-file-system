@@ -351,6 +351,8 @@ void init_fs(){
 	//Initialise the store.
 	init_store();
 
+	//if there is no root then craete a new one and store it to the unqlite store
+	//otherwise, fetch the one that has already been created from the unqlite store
 	if(!root_is_empty){
 
 		printf("init_fs: root is not empty\n");
