@@ -9,11 +9,15 @@
 #include <fuse.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <unistd.h>
 #include "myfs.h"
 
 // The one and only fcb that this implmentation will have. We'll keep it in memory. A better
 // implementation would, at the very least, cache it's root directroy in memory.
 file_node the_root_fcb;
+
+//String representations of the current working directory and the parent directory
+char *CWD_STR = ".", *PD_STR = "..";
 
 // Get file and directory attributes (meta-data).
 // Read 'man 2 stat' and 'man 2 chmod'.
@@ -58,8 +62,11 @@ static int myfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off
 		return -ENOENT;
 	}
 
-	filler(buf, ".", NULL, 0);
-	filler(buf, "..", NULL, 0);
+	struct stat cwdStat;
+	stat(the_root_fcb.path, &cwdStat);
+
+	filler(buf, ".", &cwdStat, 0);
+	//filler(buf, "..", NULL, 0);
 
 	char *pathP = (char*)&(the_root_fcb.path);
 	if(*pathP!='\0'){
@@ -370,9 +377,22 @@ void init_fs(){
 		the_root_fcb.mtime = time(0);
 		the_root_fcb.uid = getuid();
 		the_root_fcb.gid = getgid();
+		the_root_fcb.size = 0;
+		the_root_fcb.path = getcwd(the_root_fcb.path, PATH_MAX);
 
 		//Generate a key for the_root_fcb and update the root object.
 		uuid_generate(root_object.id);
+
+		//the directory contents for the root directory
+		dir_data root_dir_contents;
+
+		//store the current directory as "." in the directory and ".." as the parent directory
+		dir_entry *cwd = malloc(sizeof(dir_entry));
+		cwd->path = &CWD_STR;
+		cwd->fileNodeId = &root_object.id;
+		root_dir_contents.entries = &cwd;
+		the_root_fcb.size++;
+		root_dir_contents.entries++;
 
 		//store the root fcb in the database store
 		printf("init_fs: writing root fcb\n");
@@ -452,4 +472,11 @@ void updateRootObject() {
 	if( rc != UNQLITE_OK ){
   		error_handler(rc);
   	}
+}
+
+file_node* getFileNode(char* path) {
+
+	file_node result, current_node;
+
+	while()
 }

@@ -31,19 +31,13 @@ typedef struct {
 	//the time of the last change to the meta-data
 	time_t ctime;
 
+	//the time of the last access to the file
+	time_t atime;
+
 	//size of the file
 	off_t size;
 
-	//flag to determine if this is a directory or not
-	//is a flag so only needs to be 1 bit
-	int isDirectory : 1;
-
 } file_node;
-
-//collection of key value maps for a directory entry
-typedef struct {
-
-} dir_data;
 
 //key value map for a directory entry
 typedef struct {
@@ -55,6 +49,14 @@ typedef struct {
 	uuid_t *fileNodeId;
 
 } dir_entry;
+
+//collection of key value maps for a directory entry
+typedef struct {
+
+	//array of pointers to directory entries
+	dir_entry **entries;
+
+} dir_data;
 
 typedef struct myfcb{
 	char path[MY_MAX_PATH];
@@ -79,3 +81,4 @@ typedef struct myfcb{
 void fetchFCBFromUnqliteStore(uuid_t *data_id, file_node *buffer);
 void storeFCBInUnqliteStore(uuid_t *key_id, file_node *value_addr);
 void updateRootObject();
+file_node* getFileNode(char* path);
