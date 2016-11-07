@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include "myfs.h"
+#include <libgen.h>
 
 // The one and only fcb that this implmentation will have. We'll keep it in memory. A better
 // implementation would, at the very least, cache it's root directroy in memory.
@@ -24,26 +25,49 @@ char *CWD_STR = ".", *PD_STR = "..";
 static int myfs_getattr(const char *path, struct stat *stbuf){
 	write_log("myfs_getattr(path=\"%s\", statbuf=0x%08x)\n", path, stbuf);
 
-	memset(stbuf, 0, sizeof(struct stat));
-	if(strcmp(path, "/")==0){
-		stbuf->st_mode = the_root_fcb.mode;
-		stbuf->st_nlink = 2;
-		stbuf->st_uid = the_root_fcb.uid;
-		stbuf->st_gid = the_root_fcb.gid;
-	}else{
-		if (strcmp(path, the_root_fcb.path) == 0) {
-			stbuf->st_mode = the_root_fcb.mode;
-			stbuf->st_nlink = 1;
-			stbuf->st_mtime = the_root_fcb.mtime;
-			stbuf->st_ctime = the_root_fcb.ctime;
-			stbuf->st_size = the_root_fcb.size;
-			stbuf->st_uid = the_root_fcb.uid;
-			stbuf->st_gid = the_root_fcb.gid;
-		}else{
-			write_log("myfs_getattr - ENOENT");
-			return -ENOENT;
-		}
+	//gets the file_node struct if it exists
+	file_node fnode = read_root();
+
+	if(getFileNode(path, &fnode) == -1) {
+		printf("myfs_getattr - file not found");
+		write_log("myfs_getattr - file not found");
+		return -1;
 	}
+
+	//clear enough space for a stat by setting a stat's worth of space
+	//all to 0 so that it can be used for a new stat struct
+	memset(stbuf, 0, sizeof(struct stat));
+
+	//device id
+	//inode number
+	stbuf->st_mode = fnode.mode;
+	//number of links
+	stbuf->st_uid = fnode.uid;
+	stbuf->st_gid = fnode.gid;
+	//rdev (device id)
+	stbuf->st_size = fnode.size;
+	//blksize
+	//number of blocks
+
+	// if(strcmp(path, "/")==0){
+	// 	stbuf->st_mode = the_root_fcb.mode;
+	// 	stbuf->st_nlink = 2;
+	// 	stbuf->st_uid = the_root_fcb.uid;
+	// 	stbuf->st_gid = the_root_fcb.gid;
+	// } else {
+	// 	if (strcmp(path, the_root_fcb.path) == 0) {
+	// 		stbuf->st_mode = the_root_fcb.mode;
+	// 		stbuf->st_nlink = 1;
+	// 		stbuf->st_mtime = the_root_fcb.mtime;
+	// 		stbuf->st_ctime = the_root_fcb.ctime;
+	// 		stbuf->st_size = the_root_fcb.size;
+	// 		stbuf->st_uid = the_root_fcb.uid;
+	// 		stbuf->st_gid = the_root_fcb.gid;
+	// 	}else{
+	// 		write_log("myfs_getattr - ENOENT");
+	// 		return -ENOENT;
+	// 	}
+	// }
 
 	return 0;
 }
@@ -56,11 +80,19 @@ static int myfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off
 
 	write_log("write_readdir(path=\"%s\", buf=0x%08x, filler=0x%08x, offset=%lld, fi=0x%08x)\n", path, buf, filler, offset, fi);
 
-	// This implementation supports only a root directory so return an error if the path is not '/'.
-	if (strcmp(path, "/") != 0){
-		write_log("myfs_readdir - ENOENT");
-		return -ENOENT;
+	file_node fnode;
+	
+	if(getFileNode(path, &fnode) == -1) {
+		printf("myfs_getattr - file not found");
+		write_log("myfs_getattr - file not found");
+		return -1;
 	}
+
+	// This implementation supports only a root directory so return an error if the path is not '/'.
+	// if (strcmp(path, "/") != 0){
+	// 	write_log("myfs_readdir - ENOENT");
+	// 	return -ENOENT;
+	// }
 
 	struct stat cwdStat;
 	stat(the_root_fcb.path, &cwdStat);
@@ -128,23 +160,53 @@ static int myfs_read(const char *path, char *buf, size_t size, off_t offset, str
 static int myfs_create(const char *path, mode_t mode, struct fuse_file_info *fi){
     write_log("myfs_create(path=\"%s\", mode=0%03o, fi=0x%08x)\n", path, mode, fi);
 
-    if(the_root_fcb.path[0] != '\0'){
-		write_log("myfs_create - ENOSPC");
-		return -ENOSPC;
-	}
+    //file_node space for the root node to start and the new file block
+    file_node parent, newFileBlock;
+
+    //the base file name
+    char* baseNewFileName = basename(path);
+
+    //fetch the root object from the database
+    fetchFCBFromUnqliteStore(&root_object.id, &parent);
+    printf("path : %s\n", path);
+
+    //copy the path into the new block path
+    sprintf(newFileBlock.path, path);
+
+    //generate a new unique id for the new file block
+    uuid_generate(newFileBlock.data_id);
+
+    newFileBlock.mtime = time(0);
+    newFileBlock.uid = getuid();
+	newFileBlock.gid = getgid();
+	newFileBlock.mode |= S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IFREG;
+	newFileBlock.size = 0;
+
+ 	//    if(the_root_fcb.path[0] != '\0'){
+	// 	write_log("myfs_create - ENOSPC");
+	// 	return -ENOSPC;
+	// }
 
 	int pathlen = strlen(path);
 	if(pathlen>=MY_MAX_PATH){
 		write_log("myfs_create - ENAMETOOLONG");
 		return -ENAMETOOLONG;
 	}
-	sprintf(the_root_fcb.path, path);
-	struct fuse_context *context = fuse_get_context();
-	the_root_fcb.uid=context->uid;
-	the_root_fcb.gid=context->gid;
-	the_root_fcb.mode=mode|S_IFREG;
 
-	int rc = unqlite_kv_store(pDb,&(root_object.id),KEY_SIZE,&the_root_fcb,sizeof(struct myfcb));
+	sprintf(newFileBlock.path, path);
+
+	dir_entry dirent;
+	sprintf(dirent.path, baseNewFileName);
+	dirent.fileNodeId = newFileBlock.data_id;
+
+	dir_data dirdata;
+
+
+	printf("%s\n", dirent.path);
+	struct fuse_context *context = fuse_get_context();
+
+	storeFCBInUnqliteStore(&dirent.fileNodeId, &newFileBlock);
+	int rc = unqlite_kv_store(pDb,&(root_object.id),KEY_SIZE,&the_root_fcb,sizeof(file_node));
 	if( rc != UNQLITE_OK ){
 		write_log("myfs_create - EIO");
 		return -EIO;
@@ -429,7 +491,7 @@ int main(int argc, char *argv[]){
 
 //fetches a file control block at the id given by the user
 //into the address given by the user.
-void fetchFCBFromUnqliteStore(uuid_t *data_id, file_node *buffer) {
+int fetchFCBFromUnqliteStore(uuid_t *data_id, file_node *buffer) {
 
 	//tracks the error message returned from when fetching from the unqlite
 	//datastore
@@ -442,6 +504,7 @@ void fetchFCBFromUnqliteStore(uuid_t *data_id, file_node *buffer) {
 	//by checking the unqlite return code and also that the number of
 	//bytes returned is the right number expected.
 	rc = unqlite_kv_fetch(pDb,data_id,KEY_SIZE,NULL,&nBytes);
+
 	if( rc != UNQLITE_OK ){
 	  error_handler(rc);
 	}
@@ -452,19 +515,26 @@ void fetchFCBFromUnqliteStore(uuid_t *data_id, file_node *buffer) {
 
 	//Fetch the fcb that the root object points at. We will probably need it.
 	unqlite_kv_fetch(pDb,data_id,KEY_SIZE,buffer,&nBytes);
+
+	return 1;
 }
 
 //stores a control block at the given id with the given data
-void storeFCBInUnqliteStore(uuid_t *key_id, file_node *value_addr) {
+int storeFCBInUnqliteStore(uuid_t *key_id, file_node *value_addr) {
 
+		//store the file control block at the given address and record the result code
 		int rc = unqlite_kv_store(pDb,key_id,KEY_SIZE,value_addr,sizeof(file_node));
+		
 		if( rc != UNQLITE_OK ){
    			error_handler(rc);
+   			return -1;
 		}
+
+		return 1;
 }
 
 //updates the root object
-void updateRootObject() {
+int updateRootObject() {
 	//write the root object to the database and check for errors
 	int rc = write_root();
 
@@ -474,9 +544,45 @@ void updateRootObject() {
   	}
 }
 
-file_node* getFileNode(char* path) {
+int getFileNode(const char* path, file_node* fnode) {
 
-	file_node result, current_node;
+	file_node current_node;
 
-	while()
+	return 0;
+}
+
+int fetchDirectoryDataFromUnqliteStore(uuid_t *data_id, dir_data *buffer){
+
+//tracks the error message returned from when fetching from the unqlite
+	//datastore
+	int rc;
+
+	//number of bytes read back from the database
+	unqlite_int64 nBytes;  //Data length.
+
+	//this checks for errors before carrying out the fetch process
+	//by checking the unqlite return code and also that the number of
+	//bytes returned is the right number expected.
+	rc = unqlite_kv_fetch(pDb,data_id,KEY_SIZE,NULL,&nBytes);
+	
+	if( rc != UNQLITE_OK ){
+	  error_handler(rc);
+	}
+	if(nBytes!=sizeof(dir_data)){
+		printf("Data object has unexpected size. Doing nothing.\n");
+		exit(-1);
+	}
+
+	//Fetch the fcb that the root object points at. We will probably need it.
+	unqlite_kv_fetch(pDb,data_id,KEY_SIZE,buffer,&nBytes);
+}
+
+int storeDirectoryDataFromUnqliteStore(uuid_t *key_id, dir_data *value_addr){
+
+		//store the directory data at the given address and record the result code
+		int rc = unqlite_kv_store(pDb,key_id,KEY_SIZE,value_addr,sizeof(dir_data));
+		
+		if( rc != UNQLITE_OK ){
+   			error_handler(rc);
+		}
 }

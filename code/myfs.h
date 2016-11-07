@@ -43,10 +43,10 @@ typedef struct {
 typedef struct {
 
 	//the path to the file that this
-	char **path;
+	char *path;
 
 	//the uuid of the file_node so that it can be found in the database
-	uuid_t *fileNodeId;
+	uuid_t fileNodeId;
 
 } dir_entry;
 
@@ -78,7 +78,9 @@ typedef struct myfcb{
 	time_t root_mtime;	/* time of last modification */
 } MyFCB;
 
-void fetchFCBFromUnqliteStore(uuid_t *data_id, file_node *buffer);
-void storeFCBInUnqliteStore(uuid_t *key_id, file_node *value_addr);
-void updateRootObject();
-file_node* getFileNode(char* path);
+int fetchFCBFromUnqliteStore(uuid_t *data_id, file_node *buffer);
+int storeFCBInUnqliteStore(uuid_t *key_id, file_node *value_addr);
+int fetchDirectoryDataFromUnqliteStore(uuid_t *data_id, dir_data *buffer);
+int storeDirectoryDataFromUnqliteStore(uuid_t *key_id, dir_data *value_addr);
+int updateRootObject();
+int getFileNode(const char* path, file_node* fnode);
