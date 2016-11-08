@@ -54,7 +54,7 @@ typedef struct {
 typedef struct {
 
 	//array of pointers to directory entries
-	dir_entry **entries;
+	dir_entry *entries;
 
 } dir_data;
 
@@ -83,4 +83,7 @@ int storeFCBInUnqliteStore(uuid_t *key_id, file_node *value_addr);
 int fetchDirectoryDataFromUnqliteStore(uuid_t *data_id, dir_data *buffer);
 int storeDirectoryDataFromUnqliteStore(uuid_t *key_id, dir_data *value_addr);
 int updateRootObject();
+int fillStatWithFileNode(struct stat* destination, file_node* source);
 int getFileNode(const char* path, file_node* fnode);
+int initNewFCB(const char* path, file_node* buff);
+char** getPathArray(char* path);
