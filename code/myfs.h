@@ -6,6 +6,9 @@
 #define MY_MAX_FILENAME FILENAME_MAX
 #define MY_MAX_PATH PATH_MAX
 #define MY_MAX_FILE_SIZE 1000
+#define TRUE 1
+#define FALSE 0
+#define IS_DIR(mode) (1)
 
 typedef struct {
 
@@ -53,7 +56,7 @@ typedef struct {
 //collection of key value maps for a directory entry
 typedef struct {
 
-	//array of pointers to directory entries
+	//array of directory entries
 	dir_entry *entries;
 
 } dir_data;
@@ -86,4 +89,4 @@ int updateRootObject();
 int fillStatWithFileNode(struct stat* destination, file_node* source);
 int getFileNode(const char* path, file_node* fnode);
 int initNewFCB(const char* path, file_node* buff);
-char** getPathArray(char* path);
+int getParentFileNode(const char* path, file_node *buffer);
