@@ -24,40 +24,27 @@ char *CWD_STR = ".", *PD_STR = "..";
 // Read 'man 2 stat' and 'man 2 chmod'.
 static int myfs_getattr(const char *path, struct stat *stbuf){
 	write_log("myfs_getattr(path=\"%s\", statbuf=0x%08x)\n", path, stbuf);
-	//gets the file_node struct if it exists
+
+	//read the root
 	read_root();
+
+	//the fnode structure used for passing values to the stat structure
 	file_node fnode;
 
-	if(getFileNode(path, &fnode) == -1) {
-		write_log("myfs_getattr - file not found");
-		return -1;
+	//if id of the node - this space is needed for getting the file node
+	uuid_t nodeId;
+
+	if(getFileNode(path, &fnode, &nodeId) == -1) {
+		write_log("myfs_getattr - file not found\n");
+		return -ENOENT;
 	}
 
 	//clear enough space for a stat by setting a stat's worth of space
 	//all to 0 so that it can be used for a new stat struct
 	memset(stbuf, 0, sizeof(struct stat));
 
+	//fill the stat buff with the values in the fnode structutre
 	fillStatWithFileNode(stbuf, &fnode);
-
-	// if(strcmp(path, "/")==0){
-	// 	stbuf->st_mode = the_root_fcb.mode;
-	// 	stbuf->st_nlink = 2;
-	// 	stbuf->st_uid = the_root_fcb.uid;
-	// 	stbuf->st_gid = the_root_fcb.gid;
-	// } else {
-	// 	if (strcmp(path, the_root_fcb.path) == 0) {
-	// 		stbuf->st_mode = the_root_fcb.mode;
-	// 		stbuf->st_nlink = 1;
-	// 		stbuf->st_mtime = the_root_fcb.mtime;
-	// 		stbuf->st_ctime = the_root_fcb.ctime;
-	// 		stbuf->st_size = the_root_fcb.size;
-	// 		stbuf->st_uid = the_root_fcb.uid;
-	// 		stbuf->st_gid = the_root_fcb.gid;
-	// 	}else{
-	// 		write_log("myfs_getattr - ENOENT");
-	// 		return -ENOENT;
-	// 	}
-	// }
 
 	return 0;
 }
@@ -80,39 +67,49 @@ static int myfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off
 	//the directory entry that we are trying to fetch
 	dir_entry dirent, *entries;	
 
+	//if id of the node - this space is needed for getting the file node
+	uuid_t nodeId;
+
 	//the number of file links to the directory
 	int size;
 
 	//if there was no error for getting the file node with the given path
 	//then 
-	if(getFileNode(path, &fnode) == -1) {
-		printf("myfs_getattr - file not found");
+	if(getFileNode(path, &fnode, &nodeId) == -1) {
 		write_log("myfs_getattr - file not found");
-		return -1;
+		return -ENOENT;
 	}
 
 	//if the file given is not a directory then throw the error
-	// if(IS_DIR(fnode.mode) == FALSE) {
-	// 	write_log("readdir failed - %s is not a directory.\n", path);
-	// 	return -1;
-	// }
+	if(!IS_DIR(fnode.mode)) {
+		write_log("readdir failed - %s is not a directory.\n", path);
+		return -ENOTDIR;
+	}
 
 	//after we have done all of the checks, fill the directory data structure
 	//with the data from the database
 	fetchDirectoryDataFromUnqliteStore(&fnode.data_id, &dirdata);
 
-	//get the number of files in the directory
-	size = fnode.size - 2;
+	//if the directory that we are reading is the root then
+	//do the filler for the "." and ".." entries as they are
+	//kept separately from the store and then set the size
+	//to the size of the root directory minus 2 so that it
+	//remembers to ignore those two directories
+	if(IS_ROOT(fnode.path)){
+		//get the number of files in the directory
+		size = fnode.size - 2;
+		filler(buf, CWD_STR, NULL, 0);
+		filler(buf, PD_STR, NULL, 0);
+	} else {
+		size = fnode.size;
+	}
 
 	//get the list of directory entries
 	entries = dirdata.entries;
 
-	filler(buf, CWD_STR, NULL, 0);
-	filler(buf, PD_STR, NULL, 0);
-
 	//carry out the filler function on every file in the directory
 	for(int i = 0; i < size; i++) {
-		dirent = *entries;
+		dirent = entries[i];
 		filler(buf, dirent.path, NULL, 0);
 		entries++;
 	}
@@ -166,27 +163,50 @@ static int myfs_read(const char *path, char *buf, size_t size, off_t offset, str
 		size = 0;
 
 	return size;
+
 }
 
 // This file system only supports one file. Create should fail if a file has been created. Path must be '/<something>'.
 // Read 'man 2 creat'.
 static int myfs_create(const char *path, mode_t mode, struct fuse_file_info *fi){
 
+	write_log("myfs_create : trying to create %s\n", path);
+
+	//the file name of the new file
+	char pathBuff[strlen(path)], *filename;
+
     //file_node space for the root node to start and the new file block
     file_node parent, newFileBlock;
 
+    //the ids of the parent and the child nodes
+    uuid_t parentId;
+
+    //the directory entry of the file into its parent directory
+	dir_entry dirent;
+
+	//the directory data of this parent
+	dir_data dirdata;
+
+	//clears the space before using it
+	memset(&parent, 0, sizeof(file_node));
+	memset(&newFileBlock, 0, sizeof(file_node));
+	memset(&dirdata, 0, sizeof(dir_data));
+	memset(&dirent, 0, sizeof(dir_entry));
+
+    //copy the path into the path buff
+    sprintf(pathBuff, path);
+
+    //copies the file name without the leading '/'
+    filename = basename(pathBuff);
+
     //fetch the parent object from the database
-    getParentFileNode(path, &parent);
-    printf("path : %s\n", path);
+    getParentFileNode(path, &parent, &parentId);
 
     //initialise a new file block for the new file
-    initNewFCB(path, &newFileBlock);
+    initNewFCB(filename, &newFileBlock);
 
     //length of the path
 	int pathlen = strlen(path);
-
-	//path buff that we can use
-	char pathBuff[strlen(path)];
 
 	//if the pathlength is too lo
 	if(pathlen>=MY_MAX_PATH){
@@ -194,34 +214,25 @@ static int myfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 		return -ENAMETOOLONG;
 	}
 
-	//copy the path constant into pathBuff so that we can use it to get the basename
-	//of the file
-	sprintf(pathBuff, path);
+	//copy the file name into the path held in the directory entry
+	sprintf(dirent.path, filename);
 
-	dir_entry dirent;
-
-	sprintf(dirent.path, basename(pathBuff));
-
-	uuid_copy(dirent.fileNodeId, newFileBlock.data_id);
-
-	dir_data dirdata;
-
-	fetchDirectoryDataFromUnqliteStore(&parent.data_id, &dirdata);
-
-	dir_entry *new_entry_position = dirdata.entries + parent.size - 2;
-
-	*new_entry_position = dirent;
-
-	printf("%s\n", dirent.path);
+	//make a directory entry to link this file to its parent
+	makeDirent(filename, &parent , &dirent, &dirdata);
 
 	struct fuse_context *context = fuse_get_context();
 
+	//store the updated directory data for the parent node in the store
 	storeDirectoryDataFromUnqliteStore(&parent.data_id, &dirdata);
 
+	//store the file control block of the new file into the store
 	storeFCBInUnqliteStore(&dirent.fileNodeId, &newFileBlock);
 
-	//storeFCBInUnqliteStore(&parent. );
+	//store the updated file control block of the parent directory into
+	//the store
+	storeFCBInUnqliteStore(&parentId, &parent);
 
+	//update the root object
 	updateRootObject();
 
     return 0;
@@ -232,18 +243,23 @@ static int myfs_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 static int myfs_utime(const char *path, struct utimbuf *ubuf){
     write_log("myfs_utime(path=\"%s\", ubuf=0x%08x)\n", path, ubuf);
 
-	if(strcmp(path, the_root_fcb.path) != 0){
-		write_log("myfs_utime - ENOENT");
-		return -ENOENT;
-	}
-	the_root_fcb.mtime=ubuf->modtime;
+    file_node nodeToUpdate;
+
+    uuid_t node_uuid;
+
+    if(getFileNode(path, &nodeToUpdate, &node_uuid) != 0){
+    	write_log("myfs_utime file not found\n");
+    	return -ENOENT;
+    }
+
+    nodeToUpdate.mtime=ubuf->modtime;
+
+    if(strcmp(nodeToUpdate.path, "/") == 0)
+		the_root_fcb.mtime=ubuf->modtime;
 
 	// Write the fcb to the store.
-    int rc = unqlite_kv_store(pDb,&(root_object.id),KEY_SIZE,&the_root_fcb,sizeof(file_node));
-	if( rc != UNQLITE_OK ){
-		write_log("myfs_write - EIO");
-		return -EIO;
-	}
+
+	storeFCBInUnqliteStore(&node_uuid, &nodeToUpdate);
 
     return 0;
 }
@@ -352,9 +368,89 @@ int myfs_chown(const char *path, uid_t uid, gid_t gid){
 // Create a directory.
 // Read 'man 2 mkdir'.
 int myfs_mkdir(const char *path, mode_t mode){
-	write_log("myfs_mkdir: %s\n",path);
+	
+	write_log("mkdir %s\n", path);
 
+	//the file blocks for the new directory and the parent
+	file_node newFileBlock, parent;
+
+	//the id of where the parent file node is stored in the database
+	uuid_t parent_id;
+
+    //the directory entry of the file into its parent directory
+	dir_entry dirent;
+
+	//the directory data of this parent
+	dir_data dirdata, newDirData;
+
+	char pathBuff[strlen(path)];
+
+    sprintf(pathBuff, path);
+
+    //copies the file name without the leading '/'
+    char* filename = basename(pathBuff);
+
+    //length of the path
+	int pathlen = strlen(path);
+
+	//if the pathlength is too long then return ENAMETOOLONG
+	if(pathlen>=MY_MAX_PATH){
+		write_log("myfs_create - ENAMETOOLONG");
+		return -ENAMETOOLONG;
+	}
+
+	//clear the memory space before allocating it
+	memset(&parent, 0, sizeof(file_node));
+	memset(&newFileBlock, 0, sizeof(file_node));
+	memset(&dirdata, 0, sizeof(dir_data));
+	memset(&dirent, 0, sizeof(dir_entry));
+	
+	//if there was an error when getting the file node then return file not found
+	if(getParentFileNode(path, &parent, &parent_id) != 0) {
+		write_log("ENOENT %s parent not found\n");
+		return -ENOENT;
+	}
+
+	//make a new file control block for the new directory
+	initNewFCB(filename, &newFileBlock);
+
+	//add that this file is a directory to the mode
+	newFileBlock.mode = mode | S_IFDIR;
+
+	//make a directory entry to link this directory to its parent
+	makeDirent(filename, &parent ,&dirent, &dirdata);
+
+	//make a CWD (".") directory entry for this directory
+	makeCWDdirent(&dirent.fileNodeId, &newDirData);
+
+	//make a directory entry that links the parent directory
+	//to this directory ("..")
+	makePDdirent(&parent_id, &newDirData);
+
+	//since we only have two entries in this directory (itself and its parent),
+	//set its size to 2
+	newFileBlock.size = 2;
+
+	struct fuse_context *context = fuse_get_context();
+
+	//store the directory data of the parent into the store
+	storeDirectoryDataFromUnqliteStore(&parent.data_id, &dirdata);
+
+	//store the directory data of the new directory into the store
+	storeDirectoryDataFromUnqliteStore(&newFileBlock.data_id, &newDirData);
+
+	//store the file node of the new directory into the store
+	storeFCBInUnqliteStore(&dirent.fileNodeId, &newFileBlock);
+
+	//store the updated file node of the parent into the store
+	storeFCBInUnqliteStore(&parent_id, &parent);
+
+	//update the root object
+	updateRootObject();
+
+	//if there were no errors, return 0
     return 0;
+
 }
 
 // Delete a file.
@@ -418,6 +514,7 @@ static struct fuse_operations myfs_oper = {
 	.truncate	= myfs_truncate,
 	.flush		= myfs_flush,
 	.release	= myfs_release,
+	.mkdir 		= myfs_mkdir,
 };
 
 
@@ -452,8 +549,7 @@ void init_fs(){
 		the_root_fcb.uid = getuid();
 		the_root_fcb.gid = getgid();
 		the_root_fcb.size = 2;
-		the_root_fcb.path = "/";
-		//the_root_fcb.path = getcwd(the_root_fcb.path, PATH_MAX);
+		sprintf(the_root_fcb.path, "/");
 
 		//Generate a key for the_root_fcb and update the root object.
 		uuid_generate(root_object.id);
@@ -515,7 +611,7 @@ int fetchFCBFromUnqliteStore(uuid_t *data_id, file_node *buffer) {
 	//this checks for errors before carrying out the fetch process
 	//by checking the unqlite return code and also that the number of
 	//bytes returned is the right number expected.
-	rc = unqlite_kv_fetch(pDb,data_id,KEY_SIZE,NULL,&nBytes);
+	rc = unqlite_kv_fetch(pDb,*data_id,KEY_SIZE,NULL,&nBytes);
 
 	if( rc != UNQLITE_OK ){
 	  error_handler(rc);
@@ -535,7 +631,7 @@ int fetchFCBFromUnqliteStore(uuid_t *data_id, file_node *buffer) {
 int storeFCBInUnqliteStore(uuid_t *key_id, file_node *value_addr) {
 
 		//store the file control block at the given address and record the result code
-		int rc = unqlite_kv_store(pDb,key_id,KEY_SIZE,value_addr,sizeof(file_node));
+		int rc = unqlite_kv_store(pDb,*key_id,KEY_SIZE,value_addr,sizeof(file_node));
 		
 		if( rc != UNQLITE_OK ){
    			error_handler(rc);
@@ -558,7 +654,7 @@ int updateRootObject() {
 
 int fetchDirectoryDataFromUnqliteStore(uuid_t *data_id, dir_data *buffer){
 
-//tracks the error message returned from when fetching from the unqlite
+	//tracks the error message returned from when fetching from the unqlite
 	//datastore
 	int rc;
 
@@ -568,7 +664,7 @@ int fetchDirectoryDataFromUnqliteStore(uuid_t *data_id, dir_data *buffer){
 	//this checks for errors before carrying out the fetch process
 	//by checking the unqlite return code and also that the number of
 	//bytes returned is the right number expected.
-	rc = unqlite_kv_fetch(pDb,data_id,KEY_SIZE,NULL,&nBytes);
+	rc = unqlite_kv_fetch(pDb,*data_id,KEY_SIZE,NULL,&nBytes);
 	
 	if( rc != UNQLITE_OK ){
 	  error_handler(rc);
@@ -586,6 +682,7 @@ int fetchDirectoryDataFromUnqliteStore(uuid_t *data_id, dir_data *buffer){
 
 int fillStatWithFileNode(struct stat* destination, file_node* source){
 
+	write_log("Source path : %s\n", source->path);
 	//device id
 	//inode number
 	destination->st_mode = source->mode; //protection
@@ -594,6 +691,9 @@ int fillStatWithFileNode(struct stat* destination, file_node* source){
 	destination->st_gid = source->gid; //group
 	//rdev (device id)
 	destination->st_size = source->size; //size of file
+	destination->st_atim.tv_sec = source->atime;
+	destination->st_ctim.tv_sec = source->ctime;
+	destination->st_mtim.tv_sec = source->mtime;
 	//blksize
 	//number of blocks
 
@@ -603,7 +703,7 @@ int fillStatWithFileNode(struct stat* destination, file_node* source){
 int storeDirectoryDataFromUnqliteStore(uuid_t *key_id, dir_data *value_addr){
 
 		//store the directory data at the given address and record the result code
-		int rc = unqlite_kv_store(pDb,key_id,KEY_SIZE,value_addr,sizeof(dir_data));
+		int rc = unqlite_kv_store(pDb,*key_id,KEY_SIZE,value_addr,sizeof(dir_data));
 		
 		if( rc != UNQLITE_OK ){
    			error_handler(rc);
@@ -616,24 +716,27 @@ int initNewFCB(const char* path, file_node* buff){
 	memset(buff, 0, sizeof(file_node));
 
 	//copy the path into the file node path
-	sprintf(buff->path, path);
+	strcpy(buff->path, path);
 
     //generate a new unique id for the new file block
     uuid_generate(buff->data_id);
 
-    //set the modification time to the current time
-	time(&buff->mtime);
+    //the current time
+    time_t currentTime;
+	time(&currentTime);
 
     buff->uid = getuid(); //user
 	buff->gid = getgid(); //group
 	buff->mode |= S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IFREG; //set mode and protection
 	buff->size = 0; //size of the file
-
+	buff->atime = currentTime;
+	buff->ctime = currentTime;
+	buff->mtime = currentTime;
 
 	return 0;
 }
 
-int getFileNode(const char* path, file_node* fnode) {
+int getFileNode(const char* path, file_node* fnode, uuid_t* fnode_uuid) {
 
 	//the current file node being checked while navigating the tree
 	file_node current_node = the_root_fcb;
@@ -642,7 +745,7 @@ int getFileNode(const char* path, file_node* fnode) {
 	dir_data current_dir_data;
 
 	//the directory entry we are currently checking
-	dir_entry curr_entry, *curr_entries;
+	dir_entry curr_entry;
 
 	//the string for the path to the node we need to find
 	char pathBuff[strlen(path)];
@@ -652,54 +755,77 @@ int getFileNode(const char* path, file_node* fnode) {
 
 	//flag for determining if a corresponding directory entry has been found for a given
 	//path
-	int dirent_found = FALSE, path_error = FALSE;
+	int path_error = FALSE, dirent_found = FALSE, numberOfEntries = 0;
 
 	//copy the contents of the path into the path buffer
 	sprintf(pathBuff, path);
 
 	//if the path given is the path for the root fcb then
 	//return the fcb
-	if(strcmp(path, "/") == 0) {
+	if(IS_ROOT(path)) {
+		write_log("using root\n");
 		memcpy(fnode, &the_root_fcb, sizeof(file_node));
 		return 0;
+	} else {
+		write_log("not using root - using %s\n", pathBuff);
 	}
 
 	//get the segments of the path so that we can navigate the directory tree
 	char *pathSeg = strtok(pathBuff, PATH_SEPARATOR);
-
-	write_log("%s\n", pathSeg);
 	
 	//while there are still path segments
 	while(pathSeg != NULL && path_error == FALSE) {
 
-		//fetch the current directory data
-		fetchDirectoryDataFromUnqliteStore(&current_node.data_id, &current_dir_data);
+		dirent_found = FALSE;
 
-		//get the list of entries from the current directory data
-		curr_entries = current_dir_data.entries;
+		//if the current node is not a directory then do not try and fetch its directory data
+		if(!IS_DIR(current_node.mode)) {
 
-		//while there are still directory entries left and the directory
-		//that we need has not been found
-		while(current_dir_data.entries && (dirent_found == FALSE)) {
+			write_log("Locating file node failed : %s is not a directory.\n", current_node.path);
+			printf("%s is not a directory.\n", current_node.path);
+			return -1;
 
-			//get the next entry in the collection of entries
-			curr_entry = *curr_entries;
+		} else {
 
-			//if the next entry's path matches the current path segment then it is the target
-			//file that we are looking for then change the current node to the uuid found in the
-			//directory entry and get the next segment.
-			if(strcmp(curr_entry.path, pathSeg) == 0) {
+			//fetch the current directory data
+			fetchDirectoryDataFromUnqliteStore(&current_node.data_id, &current_dir_data);
 
-				//fetch the corresponding file block for the given path from
-				//the store
-				fetchFCBFromUnqliteStore(&curr_entry.fileNodeId, &current_node);
-				
-				//set the directory entry flag found to true
-				dirent_found = TRUE;
+			if(IS_ROOT(current_node.path)) {
+				numberOfEntries = current_node.size - 2;
+			}
+			else{
+				numberOfEntries = current_node.size;
+			}
 
-			//otherwise, increment the current entries pointer
-			} else {
-				curr_entries++;
+			//get the list of entries from the current directory data
+			dir_entry curr_entries[numberOfEntries];
+			memset(curr_entries, 0, sizeof(dir_entry) * numberOfEntries);
+			memcpy(&curr_entries, &current_dir_data.entries, sizeof(dir_entry) * numberOfEntries);
+
+			//while there are still directory entries left and the directory
+			//that we need has not been found
+			for(int i = 0; i < numberOfEntries; i++) {
+
+				//get the next entry in the collection of entries
+				curr_entry = curr_entries[i];
+
+				//if the next entry's path matches the current path segment then it is the target
+				//file that we are looking for then change the current node to the uuid found in the
+				//directory entry and get the next segment.
+				if(strcmp(curr_entry.path, pathSeg) == 0) {
+
+					//fetch the corresponding file block for the given path from
+					//the store
+					memset(&current_node, 0 , sizeof(file_node));
+					fetchFCBFromUnqliteStore(&curr_entry.fileNodeId, &current_node);
+					
+					//set the dirent_found flag to true
+					dirent_found = TRUE;
+
+					//set the directory entry flag found to true
+					break;
+				}
+
 			}
 
 		}
@@ -716,8 +842,12 @@ int getFileNode(const char* path, file_node* fnode) {
 
 	//if there was no error then copy the contents of the node we found into the
 	//space given by the user
-	if(path_error == FALSE)
-		memcpy(fnode, &curr_entry, sizeof(file_node));
+	if(path_error == FALSE) {
+		memcpy(fnode, &current_node, sizeof(file_node));
+		memset(fnode_uuid, 0, sizeof(uuid_t));
+		memcpy(fnode_uuid, &curr_entry.fileNodeId, sizeof(uuid_t));
+		//fnode_uuid = &curr_entry.fileNodeId;
+	}
 
 	//otherwise return an error
 	else
@@ -726,24 +856,65 @@ int getFileNode(const char* path, file_node* fnode) {
 	return 0;
 }
 
-int getParentFileNode(const char* path, file_node *buffer){
+int getParentFileNode(const char* path, file_node *buffer, uuid_t* buff_uuid){
 
-	const char PATH_SEPARATOR = '/', EOS_CHAR = '\0';
+	int lengthOfPath = strlen(path);
 
-	char *parentPath;
+	char pathBuff[lengthOfPath];
 
-	file_node parentNode;
+	sprintf(pathBuff, path);
 
-	sprintf(parentPath, path);
+	char* parentPath = dirname(pathBuff);
 
-	char *endChar = &parentPath[strlen(parentPath)];
+	getFileNode(parentPath, buffer, buff_uuid);
 
-	while(endChar > parentPath && *endChar != PATH_SEPARATOR)
-		endChar--;
+}
 
-	if(*endChar == PATH_SEPARATOR)
-		*endChar = EOS_CHAR;
+int makeDirent(char* filename, file_node *parentNode, dir_entry *dirent, dir_data *dirdata) {
 
-	getFileNode(parentPath, buffer);
+	sprintf(dirent->path, filename);
+
+	uuid_generate(dirent->fileNodeId);
+
+	fetchDirectoryDataFromUnqliteStore(&parentNode->data_id, dirdata);
+
+	//the index of where the new entry will go in the array of directory entries
+	//in the directory data
+	int new_entry_position;
+
+	if(IS_ROOT(parentNode->path)) {
+		new_entry_position = parentNode->size - 2;
+		the_root_fcb.size++;
+	} else {
+		new_entry_position = parentNode->size;
+	}
+
+	memcpy(&dirdata->entries[new_entry_position], dirent, sizeof(dir_entry));
+
+	parentNode->size++;
+
+}
+
+int makeCWDdirent(uuid_t *cwdId, dir_data *newDirData){
+
+	dir_entry cwdDirent;
+	memset(&cwdDirent, 0, sizeof(dir_entry));
+
+	uuid_copy(cwdDirent.fileNodeId, *cwdId);
+	sprintf(cwdDirent.path, CWD_STR);
+
+	memcpy(&newDirData->entries[0], &cwdDirent, sizeof(dir_entry));
+
+}
+
+int makePDdirent(uuid_t *pdId, dir_data *newDirData){
+
+	dir_entry pdDirent;
+	memset(&pdDirent, 0, sizeof(dir_entry));
+
+	uuid_copy(pdDirent.fileNodeId, *pdId);
+	sprintf(pdDirent.path, PD_STR);
+
+	memcpy(&newDirData->entries[1], &pdDirent, sizeof(dir_entry));
 
 }

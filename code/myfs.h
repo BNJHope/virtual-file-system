@@ -6,14 +6,17 @@
 #define MY_MAX_FILENAME FILENAME_MAX
 #define MY_MAX_PATH PATH_MAX
 #define MY_MAX_FILE_SIZE 1000
+#define MY_MAX_DIRECTORY_SIZE 256
 #define TRUE 1
 #define FALSE 0
-#define IS_DIR(mode) (1)
+#define IS_DIR(mode) (!(S_ISREG(mode)))
+#define ROOT_NAME "/"
+#define IS_ROOT(path) ((strcmp(path, ROOT_NAME)) == 0)
 
 typedef struct {
 
-	//the path to this file
-	char *path;
+	//the file name
+	char path[MY_MAX_FILENAME + 1];
 
 	//the uuid for the location of where the data of this node is located
 	//in the database
@@ -46,7 +49,7 @@ typedef struct {
 typedef struct {
 
 	//the path to the file that this
-	char *path;
+	char path[MY_MAX_FILENAME];
 
 	//the uuid of the file_node so that it can be found in the database
 	uuid_t fileNodeId;
@@ -57,7 +60,7 @@ typedef struct {
 typedef struct {
 
 	//array of directory entries
-	dir_entry *entries;
+	dir_entry entries[MY_MAX_DIRECTORY_SIZE];
 
 } dir_data;
 
@@ -87,6 +90,9 @@ int fetchDirectoryDataFromUnqliteStore(uuid_t *data_id, dir_data *buffer);
 int storeDirectoryDataFromUnqliteStore(uuid_t *key_id, dir_data *value_addr);
 int updateRootObject();
 int fillStatWithFileNode(struct stat* destination, file_node* source);
-int getFileNode(const char* path, file_node* fnode);
+int getFileNode(const char* path, file_node* fnode, uuid_t* fnode_uuid);
 int initNewFCB(const char* path, file_node* buff);
-int getParentFileNode(const char* path, file_node *buffer);
+int getParentFileNode(const char* path, file_node *buffer, uuid_t* buff_uuid);
+int makeDirent(char* filename, file_node *parentNode, dir_entry *dirent, dir_data *dirdata);
+int makeCWDdirent(uuid_t *cwdId, dir_data *newDirData);
+int makePDdirent(uuid_t *pdId, dir_data *newDirData);
