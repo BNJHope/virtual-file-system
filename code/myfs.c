@@ -109,7 +109,7 @@ static int myfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off
 
 	//carry out the filler function on every file in the directory
 	for(int i = 0; i < size; i++) {
-		dirent = entries[i];
+		dirent = *entries;
 		filler(buf, dirent.path, NULL, 0);
 		entries++;
 	}
@@ -843,6 +843,7 @@ int getFileNode(const char* path, file_node* fnode, uuid_t* fnode_uuid) {
 	//if there was no error then copy the contents of the node we found into the
 	//space given by the user
 	if(path_error == FALSE) {
+		memset(fnode, 0, sizeof(file_node));
 		memcpy(fnode, &current_node, sizeof(file_node));
 		memset(fnode_uuid, 0, sizeof(uuid_t));
 		memcpy(fnode_uuid, &curr_entry.fileNodeId, sizeof(uuid_t));
