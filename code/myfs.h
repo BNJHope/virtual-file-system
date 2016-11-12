@@ -7,6 +7,8 @@
 #define MY_MAX_PATH PATH_MAX
 #define MY_MAX_FILE_SIZE 1000
 #define MY_MAX_DIRECTORY_SIZE 256
+#define MY_MAX_BLOCK_LIMIT 12
+#define MY_BLOCK_SIZE 64
 #define TRUE 1
 #define FALSE 0
 #define IS_DIR(mode) (!(S_ISREG(mode)))
@@ -44,6 +46,32 @@ typedef struct {
 	off_t size;
 
 } file_node;
+
+typedef struct {
+
+	//collection of bytes to read.
+	char data[MY_BLOCK_SIZE];
+
+} data_block;
+
+//a colleciton of data blocks used
+typedef struct {
+
+	//array of data blocks
+	data_block data_blocks[MY_MAX_BLOCK_LIMIT];
+
+} data_collection;
+
+//data structure for a regular file data
+typedef struct {
+
+	//array of direct file blocks
+	data_block direct_blocks[MY_MAX_BLOCK_LIMIT];
+
+	//array of indirect blocks for the 
+	data_collection indirect_blocks[MY_MAX_BLOCK_LIMIT];
+
+} reg_data;
 
 //key value map for a directory entry
 typedef struct {
