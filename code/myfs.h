@@ -50,7 +50,7 @@ typedef struct {
 typedef struct {
 
 	//collection of bytes to read.
-	char data[MY_BLOCK_SIZE];
+	uint8_t data[MY_BLOCK_SIZE];
 
 } data_block;
 
