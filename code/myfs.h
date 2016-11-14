@@ -128,6 +128,7 @@ int makeDirent(char* filename, file_node *parentNode, dir_entry *dirent, dir_dat
 int makeCWDdirent(uuid_t *cwdId, dir_data *newDirData);
 int makePDdirent(uuid_t *pdId, dir_data *newDirData);
 int getOffsets(off_t offset, int *indir_block_offset, int *small_block_offset, int *interior_block_offset);
+int storeRegularFileDataFromUnqliteStore(uuid_t *key_id, reg_data *value_addr);
 int fetchRegularFileDataFromUnqliteStore(uuid_t *data_id, reg_data *buffer);
 int fetchSingleIndirectBlockFromUnqliteStore(uuid_t *data_id, single_indirect *buffer);
 int storeSingleIndirectBlockFromUnqliteStore(uuid_t *key_id, single_indirect *value_addr);
