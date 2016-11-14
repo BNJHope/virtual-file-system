@@ -1,0 +1,369 @@
+myfs_getattr(path="/.Trash", statbuf=0x66f1dc10)
+not using root - using /.Trash
+myfs_getattr - file not found
+myfs_getattr(path="/test.txt", statbuf=0x6771ec10)
+not using root - using /test.txt
+myfs_getattr - file not found
+myfs_create : trying to create /test.txt
+using root
+myfs_getattr(path="/test.txt", statbuf=0x66f1dbd0)
+not using root - using /test.txt
+Source path : test.txt
+filled in stat for test.txt successfully
+myfs_flush(path="/test.txt", fi=0x6771ecc0)
+myfs_getattr(path="/.Trash-20184", statbuf=0x66f1dc10)
+not using root - using /.Trash-20184
+myfs_getattr - file not found
+myfs_utime(path="/test.txt", ubuf=0x6771ea80)
+not using root - using /test.txt
+myfs_getattr(path="/.Trash", statbuf=0x66f1dc10)
+not using root - using /.Trash
+myfs_getattr - file not found
+myfs_getattr(path="/test.txt", statbuf=0x6771eb40)
+not using root - using /test.txt
+myfs_getattr(path="/.Trash-20184", statbuf=0x6671cc10)
+not using root - using /.Trash-20184
+Source path : test.txt
+filled in stat for test.txt successfully
+myfs_flush(path="/test.txt", fi=0x66f1dcc0)
+myfs_release(path="/test.txt", fi=0x6771ecc0)
+myfs_getattr - file not found
+myfs_open(path"/test.txt", fi=0x66f1dcc0)
+myfs_truncate(path="/test.txt", newsize=0)
+not using root - using /test.txt
+myfs_getattr(path="/test.txt", statbuf=0x6671cb40)
+not using root - using /test.txt
+Source path : test.txt
+filled in stat for test.txt successfully
+myfs_flush(path="/test.txt", fi=0x66f1dcc0)
+myfs_write(path="/test.txt", buf=0x6881f060, size=221, offset=0, fi=0x66f1dd30)
+not using root - using /test.txt
+uuid is blank : 1
+
+
+Indirect block offset : -1 Small block offset : 0 Interior Block Offset : 0
+
+remaining size : 221
+Size to write : 8
+data written : hellowor
+
+
+Indirect block offset : -1 Small block offset : 1 Interior Block Offset : 0
+
+remaining size : 213
+Size to write : 8
+data written : ldhellow
+
+
+Indirect block offset : -1 Small block offset : 2 Interior Block Offset : 0
+
+remaining size : 205
+Size to write : 8
+data written : orldhell
+
+
+Indirect block offset : -1 Small block offset : 3 Interior Block Offset : 0
+
+remaining size : 197
+Size to write : 8
+data written : oworldhe
+
+
+Indirect block offset : -1 Small block offset : 4 Interior Block Offset : 0
+
+remaining size : 189
+Size to write : 8
+data written : lloworld
+
+
+Indirect block offset : -1 Small block offset : 5 Interior Block Offset : 0
+
+remaining size : 181
+Size to write : 8
+data written : hellowor
+
+
+Indirect block offset : -1 Small block offset : 6 Interior Block Offset : 0
+
+remaining size : 173
+Size to write : 8
+data written : ldhellow
+
+
+Indirect block offset : -1 Small block offset : 7 Interior Block Offset : 0
+
+remaining size : 165
+Size to write : 8
+data written : orldhell
+
+
+Indirect block offset : -1 Small block offset : 8 Interior Block Offset : 0
+
+remaining size : 157
+Size to write : 8
+data written : oworldhe
+
+
+Indirect block offset : -1 Small block offset : 9 Interior Block Offset : 0
+
+remaining size : 149
+Size to write : 8
+data written : lloworld
+
+
+Indirect block offset : -1 Small block offset : 10 Interior Block Offset : 0
+
+remaining size : 141
+Size to write : 8
+data written : hellowor
+
+
+Indirect block offset : -1 Small block offset : 11 Interior Block Offset : 0
+
+remaining size : 133
+Size to write : 8
+data written : ldhellow
+
+
+Indirect block offset : 0 Small block offset : 0 Interior Block Offset : 0
+
+remaining size : 125
+
+
+Indirect block offset : 0 Small block offset : 1 Interior Block Offset : 0
+
+remaining size : 117
+
+
+Indirect block offset : 0 Small block offset : 2 Interior Block Offset : 0
+
+remaining size : 109
+
+
+Indirect block offset : 0 Small block offset : 3 Interior Block Offset : 0
+
+remaining size : 101
+
+
+Indirect block offset : 0 Small block offset : 4 Interior Block Offset : 0
+
+remaining size : 93
+
+
+Indirect block offset : 0 Small block offset : 5 Interior Block Offset : 0
+
+remaining size : 85
+
+
+Indirect block offset : 0 Small block offset : 6 Interior Block Offset : 0
+
+remaining size : 77
+
+
+Indirect block offset : 0 Small block offset : 7 Interior Block Offset : 0
+
+remaining size : 69
+
+
+Indirect block offset : 0 Small block offset : 8 Interior Block Offset : 0
+
+remaining size : 61
+
+
+Indirect block offset : 0 Small block offset : 9 Interior Block Offset : 0
+
+remaining size : 53
+
+
+Indirect block offset : 0 Small block offset : 10 Interior Block Offset : 0
+
+remaining size : 45
+
+
+Indirect block offset : 0 Small block offset : 11 Interior Block Offset : 0
+
+remaining size : 37
+
+
+Indirect block offset : 1 Small block offset : 0 Interior Block Offset : 0
+
+remaining size : 29
+
+
+Indirect block offset : 1 Small block offset : 1 Interior Block Offset : 0
+
+remaining size : 21
+
+
+Indirect block offset : 1 Small block offset : 2 Interior Block Offset : 0
+
+remaining size : 13
+
+
+Indirect block offset : 1 Small block offset : 3 Interior Block Offset : 0
+
+remaining size : 5
+myfs writing to uuid : m˛9ÄÓòGKÉ\ƒ® €X{test.txt
+myfs_flush(path="/test.txt", fi=0x6671ccc0)
+myfs_release(path="/test.txt", fi=0x6771ecc0)
+myfs_open(path"/test.txt", fi=0x66f1dcc0)
+myfs_getattr(path="/test.txt", statbuf=0x6671cbe0)
+not using root - using /test.txt
+Source path : test.txt
+filled in stat for test.txt successfully
+myfs_read(path="/test.txt", buf=0x60000c60, size=4096, offset=0, fi=0x6771ecc0)
+not using root - using /test.txt
+uuid is blank : 0
+trying to fetch file data with key : sò˜ËpK îµUê$π
+fetched successfully
+Read remaining_size : 4096
+
+
+Indirect block offset : -1 Small block offset : 0 Interior Block Offset : 0
+
+Read remaining_size : 4088
+
+
+Indirect block offset : -1 Small block offset : 1 Interior Block Offset : 0
+
+Read remaining_size : 4080
+
+
+Indirect block offset : -1 Small block offset : 2 Interior Block Offset : 0
+
+Read remaining_size : 4072
+
+
+Indirect block offset : -1 Small block offset : 3 Interior Block Offset : 0
+
+Read remaining_size : 4064
+
+
+Indirect block offset : -1 Small block offset : 4 Interior Block Offset : 0
+
+Read remaining_size : 4056
+
+
+Indirect block offset : -1 Small block offset : 5 Interior Block Offset : 0
+
+Read remaining_size : 4048
+
+
+Indirect block offset : -1 Small block offset : 6 Interior Block Offset : 0
+
+Read remaining_size : 4040
+
+
+Indirect block offset : -1 Small block offset : 7 Interior Block Offset : 0
+
+Read remaining_size : 4032
+
+
+Indirect block offset : -1 Small block offset : 8 Interior Block Offset : 0
+
+Read remaining_size : 4024
+
+
+Indirect block offset : -1 Small block offset : 9 Interior Block Offset : 0
+
+Read remaining_size : 4016
+
+
+Indirect block offset : -1 Small block offset : 10 Interior Block Offset : 0
+
+Read remaining_size : 4008
+
+
+Indirect block offset : -1 Small block offset : 11 Interior Block Offset : 0
+
+Read remaining_size : 4000
+
+
+Indirect block offset : 0 Small block offset : 0 Interior Block Offset : 0
+
+Read remaining_size : 3992
+
+
+Indirect block offset : 0 Small block offset : 1 Interior Block Offset : 0
+
+Read remaining_size : 3984
+
+
+Indirect block offset : 0 Small block offset : 2 Interior Block Offset : 0
+
+Read remaining_size : 3976
+
+
+Indirect block offset : 0 Small block offset : 3 Interior Block Offset : 0
+
+Read remaining_size : 3968
+
+
+Indirect block offset : 0 Small block offset : 4 Interior Block Offset : 0
+
+Read remaining_size : 3960
+
+
+Indirect block offset : 0 Small block offset : 5 Interior Block Offset : 0
+
+Read remaining_size : 3952
+
+
+Indirect block offset : 0 Small block offset : 6 Interior Block Offset : 0
+
+Read remaining_size : 3944
+
+
+Indirect block offset : 0 Small block offset : 7 Interior Block Offset : 0
+
+Read remaining_size : 3936
+
+
+Indirect block offset : 0 Small block offset : 8 Interior Block Offset : 0
+
+Read remaining_size : 3928
+
+
+Indirect block offset : 0 Small block offset : 9 Interior Block Offset : 0
+
+Read remaining_size : 3920
+
+
+Indirect block offset : 0 Small block offset : 10 Interior Block Offset : 0
+
+Read remaining_size : 3912
+
+
+Indirect block offset : 0 Small block offset : 11 Interior Block Offset : 0
+
+Read remaining_size : 3904
+
+
+Indirect block offset : 1 Small block offset : 0 Interior Block Offset : 0
+
+Read remaining_size : 3896
+
+
+Indirect block offset : 1 Small block offset : 1 Interior Block Offset : 0
+
+Read remaining_size : 3888
+
+
+Indirect block offset : 1 Small block offset : 2 Interior Block Offset : 0
+
+Read remaining_size : 3880
+
+
+Indirect block offset : 1 Small block offset : 3 Interior Block Offset : 0
+
+Read remaining_size : 3872
+
+
+Indirect block offset : 1 Small block offset : 4 Interior Block Offset : 0
+
+myfs_read data block uuid not foundmyfs_getattr(path="/test.txt", statbuf=0x66f1dbe0)
+not using root - using /test.txt
+Source path : test.txt
+filled in stat for test.txt successfully
+myfs_flush(path="/test.txt", fi=0x6671ccc0)
+myfs_release(path="/test.txt", fi=0x6771ecc0)

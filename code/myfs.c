@@ -37,7 +37,7 @@ static int myfs_getattr(const char *path, struct stat *stbuf){
 	memset(&fnode, 0, sizeof(file_node));
 	memset(&nodeId, 0, sizeof(uuid_t));
 
-	if(getFileNode(path, &fnode, &nodeId) == -1) {
+	if(getFileNode(path, &fnode, &nodeId) == -ENOENT) {
 		write_log("myfs_getattr - file not found\n");
 		return -ENOENT;
 	}
@@ -132,11 +132,9 @@ static int myfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off
 // Read a file.
 // Read 'man 2 read'.
 static int myfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi){
-	size_t len;
 	(void) fi;
 
 	write_log("myfs_read(path=\"%s\", buf=0x%08x, size=%d, offset=%lld, fi=0x%08x)\n", path, buf, size, offset, fi);
-
 	
     //the remaining size that we have to read
     size_t remaining_size = size, size_to_read;
@@ -166,11 +164,11 @@ static int myfs_read(const char *path, char *buf, size_t size, off_t offset, str
     }
 
     //if the size given to us was greater than the maximum file size then exit
-	if(size >= MY_MAX_FILE_SIZE){
-		write_log("Size too large\nSize : %d\nFile to read size : %d\n", size, file_to_read.size);
-		write_log("myfs_read - EFBIG\n");
-		return -EFBIG;
-	}
+	// if(size >= MY_MAX_FILE_SIZE){
+	// 	write_log("Size too large\nSize : %d\nFile to read size : %d\n", size, file_to_read.size);
+	// 	write_log("myfs_read - EFBIG\n");
+	// 	return -EFBIG;
+	// }
 
 	//the data block to read to the file data
 	uint8_t data_block[MY_BLOCK_SIZE];
@@ -204,48 +202,22 @@ static int myfs_read(const char *path, char *buf, size_t size, off_t offset, str
 	//get the various offset values needed
 	getOffsets(offset, &indir_block_offset, &small_block_offset, &interior_block_offset);
 
-	write_log("\n\nIndirect block offset : %d Small block offset : %d Interior Block Offset : %d\n\n", indir_block_offset, small_block_offset, interior_block_offset);
-
 	//while there is data still left to write
 	while(remaining_size != 0) {
 
-		//if the remaining size left will not fill the block
-		if(remaining_size < (MY_BLOCK_SIZE - interior_block_offset)) {
-			
-			//we write the remaining size to the block
-			size_to_read = remaining_size;
-			remaining_size = 0;
+		write_log("Read remaining_size : %d\n", remaining_size);
+		write_log("\n\nIndirect block offset : %d Small block offset : %d Interior Block Offset : %d\n\n", indir_block_offset, small_block_offset, interior_block_offset);
 
-		} else {
-
-			//set the size to write as the size of the rest of the block
-			//from the interior block offset
-			size_to_read = MY_BLOCK_SIZE - interior_block_offset;
-
-			//decrease the remaining size by the amount we need to write
-			remaining_size -= size_to_read;
-		}
+		getSizeToRead(&size_to_read, &remaining_size, &interior_block_offset);
 
 		//clear the data block
 		memset(&curr_block, 0, sizeof(data_block));
 
 		//if we are in direct blocks only at this stage then try to fetch the direct block and write to it
-		if(indir_block_offset == - 1) {
+		if(indir_block_offset == -1) {
 
-			//get the uuid of the next direct block
-			uuid_copy(data_block_uuid, file_data.direct_blocks[small_block_offset]);
-
-			//if the block has not been created and so has a blank uuid then create a new uuid for it
-			if(UUID_IS_BLANK(data_block_uuid)) {
-
-				write_log("myfs_read data block uuid not found");
+			if (getReadDataBlockData(&curr_block, &data_block_uuid, &file_data.direct_blocks[small_block_offset]) == -1) {
 				return size_written;
-
-			} else {
-
-				//get the data block from the file
-				fetchDataBlockFromUnqliteStore(&data_block_uuid, &curr_block);
-
 			}
 
 			//write the new data to the structure and then subsequently to the database
@@ -254,9 +226,10 @@ static int myfs_read(const char *path, char *buf, size_t size, off_t offset, str
 
 			//if we have reached the end of the current indirect block then write it to the database and then
 			//increment
-			if(++interior_block_offset == MY_MAX_BLOCK_LIMIT) {
+			if(++small_block_offset == MY_MAX_BLOCK_LIMIT) {
 				indir_block_offset++;
 				interior_block_offset = 0;
+				small_block_offset = 0;
 				single_indirect_call_needed = 1;
 			}
 
@@ -266,38 +239,21 @@ static int myfs_read(const char *path, char *buf, size_t size, off_t offset, str
 			//if we are either writing for the first time or we are currently not writing to a single
 			//indirect then create a new data space for it and make a key for it
 			if(single_indirect_call_needed == 1) {
-				memset(&indir_block, 0, sizeof(single_indirect));
 
-				uuid_copy(single_indirect_uuid, file_data.indirect_blocks[indir_block_offset]);
-
-					if(UUID_IS_BLANK(single_indirect_uuid)) {
-
-						write_log("myfs_read indirect block uuid not found");
-						return size_written;
-
-					} else {
-
-						fetchSingleIndirectBlockFromUnqliteStore(&single_indirect_uuid, &indir_block);
-
-					}
-
+				//try to get the next single indirect block. If there is not another one then write back the
+				//number of bytes that we read.
+				if(getReadSingleIndirectBlock(&indir_block, &single_indirect_uuid, &file_data.indirect_blocks[indir_block_offset]) == -1){
+					return size_written;
+				}
+				
+				//we don't need to make another database call again until we reach the end of this indirect block's
+				//set of data blocks, so set this flag to 0
 				single_indirect_call_needed = 0;
 			}
 
 			//get the uuid of the next direct block
-			uuid_copy(data_block_uuid, indir_block.data_blocks[small_block_offset]);
-
-			//if the block has not been created and so has a blank uuid then create a new uuid for it
-			if(UUID_IS_BLANK(data_block_uuid)) {
-
-				write_log("myfs_read data block uuid not found");
+			if((getReadDataBlockData(&curr_block, &data_block_uuid, &indir_block.data_blocks[small_block_offset]) == -1)) {
 				return size_written;
-
-			} else {
-
-				//get the data block from the file
-				fetchDataBlockFromUnqliteStore(&data_block_uuid, &curr_block);
-
 			}
 
 			//write the new data to the structure and then subsequently to the database
@@ -306,10 +262,14 @@ static int myfs_read(const char *path, char *buf, size_t size, off_t offset, str
 
 			//if we have reached the end of the current indirect block then write it to the database and then
 			//increment
-			if(++interior_block_offset == MY_MAX_BLOCK_LIMIT) {
+			if(++small_block_offset == MY_MAX_BLOCK_LIMIT) {
 				storeSingleIndirectBlockFromUnqliteStore(&single_indirect_uuid, &indir_block);
 				indir_block_offset++;
 				interior_block_offset = 0;
+				small_block_offset = 0;
+
+				//set this flag to one so that we know that we have to make another data base call for
+				//the next indirect block
 				single_indirect_call_needed = 1;
 			}
 
@@ -319,41 +279,6 @@ static int myfs_read(const char *path, char *buf, size_t size, off_t offset, str
 	}
 
 	return size_written;
-	// if(strcmp(path, the_root_fcb.path) != 0){
-	// 	write_log("myfs_read - ENOENT");
-	// 	return -ENOENT;
-	// }
-
-	// len = the_root_fcb.size;
-
-	// uint8_t data_block[MY_MAX_FILE_SIZE];
-
-	// memset(&data_block, 0, MY_MAX_FILE_SIZE);
-	// uuid_t *data_id = &(the_root_fcb.data_id);
-	// // Is there a data block?
-	// if(uuid_compare(zero_uuid,*data_id)!=0){
-	// 	unqlite_int64 nBytes;  //Data length.
-	// 	int rc = unqlite_kv_fetch(pDb,data_id,KEY_SIZE,NULL,&nBytes);
-	// 	if( rc != UNQLITE_OK ){
-	// 	  error_handler(rc);
-	// 	}
-	// 	if(nBytes!=MY_MAX_FILE_SIZE){
-	// 		write_log("myfs_read - EIO");
-	// 		return -EIO;
-	// 	}
-
-	// 	// Fetch the fcb the root data block from the store.
-	// 	unqlite_kv_fetch(pDb,data_id,KEY_SIZE,&data_block,&nBytes);
-	// }
-
-	// if (offset < len) {
-	// 	if (offset + size > len)
-	// 		size = len - offset;
-	// 	memcpy(buf, &data_block + offset, size);
-	// } else
-	// 	size = 0;
-
-	return size;
 
 }
 
@@ -530,54 +455,26 @@ static int myfs_write(const char *path, const char *buf, size_t size, off_t offs
 	//get the various offset values needed
 	getOffsets(offset, &indir_block_offset, &small_block_offset, &interior_block_offset);
 
-	write_log("\n\nIndirect block offset : %d Small block offset : %d Interior Block Offset : %d\n\n", indir_block_offset, small_block_offset, interior_block_offset);
-
-	write_log("remaining size : %d\n", remaining_size);
 	//while there is data still left to write
 	while(remaining_size != 0) {
 
-		//if the remaining size left will not fill the block
-		if(remaining_size < (MY_BLOCK_SIZE - interior_block_offset)) {
-			
-			//we write the remaining size to the block
-			size_to_write = remaining_size;
-			remaining_size = 0;
+	write_log("\n\nIndirect block offset : %d Small block offset : %d Interior Block Offset : %d\n\n", indir_block_offset, small_block_offset, interior_block_offset);
+	write_log("remaining size : %d\n", remaining_size);
 
-		} else {
+		//get the size that we are writing to the file
+		getSizeToRead(&size_to_write, &remaining_size, &interior_block_offset);
 
-			//set the size to write as the size of the rest of the block
-			//from the interior block offset
-			size_to_write = MY_BLOCK_SIZE - interior_block_offset;
-
-			//decrease the remaining size by the amount we need to write
-			remaining_size -= size_to_write;
-		}
-
-		write_log("trying to clear data block\n");
 		//clear the data block
 		memset(&curr_block, 0, sizeof(data_block));
-		write_log("cleared data block\n");
 
 		//if we are in direct blocks only at this stage then try to fetch the direct block and write to it
 		if(indir_block_offset == - 1) {
 
-			write_log("made it into non indir block\n");
-			//get the uuid of the next direct block
-			uuid_copy(data_block_uuid, file_data.direct_blocks[small_block_offset]);
+			//get the uuid of the next direct block and get the data that corresponds to it
+			//if it exists
+			getWriteDataBlockData(&curr_block, &data_block_uuid, &file_data.direct_blocks[small_block_offset]);
 
-			//if the block has not been created and so has a blank uuid then create a new uuid for it
-			if(UUID_IS_BLANK(data_block_uuid)) {
-
-				uuid_generate(file_data.direct_blocks[small_block_offset]);
-				uuid_copy(data_block_uuid, file_data.direct_blocks[small_block_offset]);
-
-			} else {
-
-				//get the data block from the file
-				fetchDataBlockFromUnqliteStore(&data_block_uuid, &curr_block);
-
-			}
-
+			write_log("Size to write : %d\n", size_to_write);
 			//write the new data to the structure and then subsequently to the database
 			memcpy(&curr_block.data[interior_block_offset], &buf[size_read], size_to_write);
 			write_log("data written : %s\n", curr_block.data);
@@ -585,8 +482,9 @@ static int myfs_write(const char *path, const char *buf, size_t size, off_t offs
 
 			//if we have reached the end of the current indirect block then write it to the database and then
 			//increment
-			if(++interior_block_offset == MY_MAX_BLOCK_LIMIT) {
+			if(++small_block_offset == MY_MAX_BLOCK_LIMIT) {
 				indir_block_offset++;
+				small_block_offset = 0;
 				interior_block_offset = 0;
 				single_indirect_call_needed = 1;
 			}
@@ -597,38 +495,14 @@ static int myfs_write(const char *path, const char *buf, size_t size, off_t offs
 			//if we are either writing for the first time or we are currently not writing to a single
 			//indirect then create a new data space for it and make a key for it
 			if(single_indirect_call_needed == 1) {
-				memset(&indir_block, 0, sizeof(single_indirect));
 
-				uuid_copy(single_indirect_uuid, file_data.indirect_blocks[indir_block_offset]);
-
-					if(UUID_IS_BLANK(single_indirect_uuid)) {
-						uuid_generate(file_data.indirect_blocks[indir_block_offset]);
-						uuid_copy(single_indirect_uuid, file_data.indirect_blocks[indir_block_offset]);
-
-					} else {
-
-						fetchSingleIndirectBlockFromUnqliteStore(&single_indirect_uuid, &indir_block);
-
-					}
+				getWriteSingleIndirectBlock(&indir_block, &single_indirect_uuid, &file_data.indirect_blocks[indir_block_offset]);
 
 				single_indirect_call_needed = 0;
 			}
 
-			//get the uuid of the next direct block
-			uuid_copy(data_block_uuid, indir_block.data_blocks[small_block_offset]);
-
-			//if the block has not been created and so has a blank uuid then create a new uuid for it
-			if(UUID_IS_BLANK(data_block_uuid)) {
-
-				uuid_generate(file_data.direct_blocks[small_block_offset]);
-				uuid_copy(data_block_uuid, file_data.direct_blocks[small_block_offset]);
-
-			} else {
-
-				//get the data block from the file
-				fetchDataBlockFromUnqliteStore(&data_block_uuid, &curr_block);
-
-			}
+			//get the uuid of the next direct block and data of the next block
+			getWriteDataBlockData(&curr_block, &data_block_uuid, &indir_block.data_blocks[small_block_offset]);
 
 			//write the new data to the structure and then subsequently to the database
 			memcpy(&curr_block.data[interior_block_offset], &buf[size_read], size_to_write);
@@ -636,9 +510,10 @@ static int myfs_write(const char *path, const char *buf, size_t size, off_t offs
 
 			//if we have reached the end of the current indirect block then write it to the database and then
 			//increment
-			if(++interior_block_offset == MY_MAX_BLOCK_LIMIT) {
+			if(++small_block_offset == MY_MAX_BLOCK_LIMIT) {
 				storeSingleIndirectBlockFromUnqliteStore(&single_indirect_uuid, &indir_block);
 				indir_block_offset++;
+				small_block_offset = 0;
 				interior_block_offset = 0;
 				single_indirect_call_needed = 1;
 			}
@@ -687,6 +562,57 @@ int myfs_truncate(const char *path, off_t newsize){
     //if the block was not fetched successfully then return the error code
     if((rc = getFileNode(path, &fnode, &file_uuid)) != 0) {
     	return rc;
+    }
+
+    //if the user requested to make a bigger size file, then make the file size larger by adding 0s
+    //onto the end of the file until the last character, which should be -1 to denote the end of the file
+    if(fnode.size < newsize) {
+
+    	//the size that we are adding to the file
+    	size_t addSize = newsize - fnode.size;
+
+    	//the start position of where we are adding 0s to is the current
+    	//end of the file, which is denoted by the size of the file
+    	off_t startPosition = fnode.size;
+
+    	//the buffer of 0s and the EOF -1 character to add
+    	char buffdata[addSize];
+
+    	//set the array to a collection of 0s
+    	memset(&buffdata, 0, addSize);
+    	
+    	//set the last piece of data in the array as a -1 to denote the EOF
+    	buffdata[addSize - 1] = -1;
+
+    	//convert the data into a const char* so that it can be passed to the write function
+    	const char* bufPointer = buffdata;
+
+    	//empty placeholder for fuse info
+		struct fuse_file_info fi;    	
+
+    	//write the buffer to the file
+    	myfs_write(path, bufPointer, addSize, startPosition, &fi);
+
+    //if the new size of smaller than the current size then write a single -1 to the file where the file ends
+    } else if (fnode.size > newsize) {
+
+    	char EOFmarker = -1;
+
+    	//EOFmarker in buffer form for the writer function
+    	const char* data_pointer = &EOFmarker;
+
+    	//the position of where we are placing the end of file character
+    	off_t EOFPosition = newsize;
+
+    	//the amount we are writing to the file
+    	size_t write_size = 1;
+
+    	//empty placeholder for fuse info
+		struct fuse_file_info fi;  
+
+		//write the eof character to the buffer
+    	myfs_write(path, data_pointer, write_size, EOFPosition, &fi);
+
     }
 
     //set the new size of the file control block
@@ -1003,6 +929,8 @@ int updateRootObject() {
   	}
 }
 
+//fetch a directory data structure from the database at the given key and load
+//it into the given buffer
 int fetchDirectoryDataFromUnqliteStore(uuid_t *data_id, dir_data *buffer){
 
 	//tracks the error message returned from when fetching from the unqlite
@@ -1031,7 +959,7 @@ int fetchDirectoryDataFromUnqliteStore(uuid_t *data_id, dir_data *buffer){
 	return 1;
 }
 
-
+//store the directory data structure passed given at the given key
 int storeDirectoryDataFromUnqliteStore(uuid_t *key_id, dir_data *value_addr){
 
 		//store the directory data at the given address and record the result code
@@ -1042,6 +970,8 @@ int storeDirectoryDataFromUnqliteStore(uuid_t *key_id, dir_data *value_addr){
 		}
 }
 
+//fetch a regular file structure from the database at the given key and load
+//it into the given buffer
 int fetchRegularFileDataFromUnqliteStore(uuid_t *data_id, reg_data *buffer){
 
 	//tracks the error message returned from when fetching from the unqlite
@@ -1069,6 +999,7 @@ int fetchRegularFileDataFromUnqliteStore(uuid_t *data_id, reg_data *buffer){
 	return 1;
 }
 
+//store the regular file structure structure given at the given key
 int storeRegularFileDataFromUnqliteStore(uuid_t *key_id, reg_data *value_addr){
 
 		//store the regulat filed data structure at the given address and record the result code
@@ -1079,6 +1010,8 @@ int storeRegularFileDataFromUnqliteStore(uuid_t *key_id, reg_data *value_addr){
 		}
 }
 
+//fetch a single indirect block structure from the database at the given key and load
+//it into the given buffer
 int fetchSingleIndirectBlockFromUnqliteStore(uuid_t *data_id, single_indirect *buffer){
 
 	//tracks the error message returned from when fetching from the unqlite
@@ -1106,6 +1039,7 @@ int fetchSingleIndirectBlockFromUnqliteStore(uuid_t *data_id, single_indirect *b
 	return 1;
 }
 
+//store the single indirect structure structure given at the given key
 int storeSingleIndirectBlockFromUnqliteStore(uuid_t *key_id, single_indirect *value_addr){
 
 		//store the single indirect at the given address and record the result code
@@ -1116,6 +1050,8 @@ int storeSingleIndirectBlockFromUnqliteStore(uuid_t *key_id, single_indirect *va
 		}
 }
 
+//fetch a single data block structure from the database at the given key and load
+//it into the given buffer
 int fetchDataBlockFromUnqliteStore(uuid_t *data_id, data_block *buffer){
 
 	//tracks the error message returned from when fetching from the unqlite
@@ -1143,6 +1079,7 @@ int fetchDataBlockFromUnqliteStore(uuid_t *data_id, data_block *buffer){
 	return 1;
 }
 
+//store the single data block structure given at the given key
 int storeDataBlockFromUnqliteStore(uuid_t *key_id, data_block *value_addr){
 
 		//store the data block at the given address and record the result code
@@ -1153,7 +1090,8 @@ int storeDataBlockFromUnqliteStore(uuid_t *key_id, data_block *value_addr){
 		}
 }
 
-int fillStatWithFileNode(struct stat* destination, file_node* source){
+//fill the given stat struct with the data from the file control block
+int fillStatWithFileNode(struct stat* destination, file_node* source) {
 
 	write_log("Source path : %s\n", source->path);
 	//device id
@@ -1173,7 +1111,8 @@ int fillStatWithFileNode(struct stat* destination, file_node* source){
 	return 0;
 }
 
-
+//create a new file control block for the file at the given path by filling
+//the file control block buffer
 int initNewFCB(const char* path, file_node* buff){
 
 	//reset the space for the new file control block
@@ -1197,6 +1136,8 @@ int initNewFCB(const char* path, file_node* buff){
 	return 0;
 }
 
+//retrieve the file control block of the file at the given path and also
+//the uuid of where that file control block is being kept in the database
 int getFileNode(const char* path, file_node* fnode, uuid_t* fnode_uuid) {
 
 	//the current file node being checked while navigating the tree
@@ -1244,7 +1185,7 @@ int getFileNode(const char* path, file_node* fnode, uuid_t* fnode_uuid) {
 
 			write_log("Locating file node failed : %s is not a directory.\n", pathSeg);
 			printf("%s is not a directory.\n", current_node.path);
-			return -1;
+			return -ENOENT;
 
 		} else {
 
@@ -1262,12 +1203,11 @@ int getFileNode(const char* path, file_node* fnode, uuid_t* fnode_uuid) {
 
 			// write_log("fetch successful for %s\n", current_node.path);
 
-			if(IS_ROOT(current_node.path)) {
+			if(IS_ROOT(current_node.path))
 				numberOfEntries = current_node.size - 2;
-			}
-			else{
+			else
 				numberOfEntries = current_node.size;
-			}
+			
 
 			// write_log("number of entries : %d\n", numberOfEntries);
 
@@ -1332,39 +1272,60 @@ int getFileNode(const char* path, file_node* fnode, uuid_t* fnode_uuid) {
 	//otherwise return an error
 	else {
 		// write_log("get file node returns error\n");
-		return -1;
+		return -ENOENT;
 	}
 
 	// write_log("returning successfully on getting file node");
 	return 0;
 }
 
+//retrieve the file control block of the parent directory of the file
+//at the given path and also the uuid of where that file control block
+//is being kept in the database
 int getParentFileNode(const char* path, file_node *buffer, uuid_t* buff_uuid){
 
+	//get the length of the path so that we can copy the path over
 	int lengthOfPath = strlen(path);
 
+	//the place for the copy of the patj so that we can extract the parent directory
+	//from the file path
 	char pathBuff[lengthOfPath];
 
+	//copy the const char* path into the pathBuff array
 	sprintf(pathBuff, path);
 
+	//the parent path is extract from the path buff using the dirname function, which
+	//strips of the final path segment ("man 3 dirname")
 	char* parentPath = dirname(pathBuff);
 
+	//get the file control block and the uuid of the parent
 	getFileNode(parentPath, buffer, buff_uuid);
 
 }
 
+//create a direct entry to link the file name with the given parent node and return it
+//in the directory entry buffer and store the directory entry in the given directory data
 int makeDirent(char* filename, file_node *parentNode, dir_entry *dirent, dir_data *dirdata) {
 
+	//copy the file name into the path of the directory entry so that we know that
+	//the uuid stored in the directory entry is where the file with that file name is
+	//kept in the file store
 	sprintf(dirent->path, filename);
 
+	//generate a uuid for the directory entry
 	uuid_generate(dirent->fileNodeId);
 
+	//fetch the directory data of the parent directory from the store
 	fetchDirectoryDataFromUnqliteStore(&parentNode->data_id, dirdata);
 
 	//the index of where the new entry will go in the array of directory entries
 	//in the directory data
 	int new_entry_position;
 
+	//if the parent is the root then set the new entry position without consideration
+	//for "." and ".." since we have not stored these in the root directory, and increment
+	//the size of the root file control block. Otherwise set the new entry position as the
+	//size of the parent node
 	if(IS_ROOT(parentNode->path)) {
 		new_entry_position = parentNode->size - 2;
 		the_root_fcb.size++;
@@ -1372,8 +1333,11 @@ int makeDirent(char* filename, file_node *parentNode, dir_entry *dirent, dir_dat
 		new_entry_position = parentNode->size;
 	}
 
+	//copy the data stored in the directory entry that we have created into
+	//the directory data at the new entry index
 	memcpy(&dirdata->entries[new_entry_position], dirent, sizeof(dir_entry));
 
+	//increment the size kept by the parent node
 	parentNode->size++;
 
 }
@@ -1402,6 +1366,8 @@ int makePDdirent(uuid_t *pdId, dir_data *newDirData){
 
 }
 
+//get the offsets needed for the indirect block, direct block and interior character in the data buffer from
+//the offset value that has been given
 int getOffsets(off_t offset, int *indir_block_offset, int *small_block_offset, int *interior_block_offset) {
 
 	//if the offset starts after the end of the direct blocks
@@ -1429,4 +1395,124 @@ int getOffsets(off_t offset, int *indir_block_offset, int *small_block_offset, i
 	}
 
 	return 0;
+}
+
+//get the size of a memory block to read depending on the offsets and the remaining size to be read
+int getSizeToRead(size_t *size_to_read, size_t *remaining_size, int *interior_block_offset) {
+
+	//if the remaining size left will not fill the block
+	if(*remaining_size < (MY_BLOCK_SIZE - *interior_block_offset)) {
+		
+		//we write the remaining size to the block
+		*size_to_read = *remaining_size;
+		*remaining_size = 0;
+
+	} else {
+
+		//set the size to write as the size of the rest of the block
+		//from the interior block offset
+		*size_to_read = MY_BLOCK_SIZE - *interior_block_offset;
+
+		//decrease the remaining size by the amount we need to write
+		*remaining_size -= *size_to_read;
+	}
+
+	return 0;
+
+}
+
+//reads a block at the given source uuid and copies it into the destination uuid. If
+//it does not exist then we return -1 so that the read function knows to return the
+//number of bytes that have been read at this point since there is nothing left
+int getReadDataBlockData(data_block *curr_block, uuid_t *dest, uuid_t *src){
+
+	//get the uuid of the next direct block
+	uuid_copy(*dest, *src);
+
+	//if the block has not been created and so has a blank uuid then create a new uuid for it
+	if(UUID_IS_BLANK(*dest)) {
+
+		write_log("myfs_read data block uuid not found");
+		return -1;
+
+	} else {
+
+		//get the data block from the file
+		fetchDataBlockFromUnqliteStore(dest, curr_block);
+
+	}
+
+	return 0;
+}
+
+//reads a block at the given source uuid and copies it into the destination uuid. If
+//it does not exist then we generate a new uuid for the block
+int getWriteDataBlockData(data_block *curr_block, uuid_t *dest, uuid_t *src){
+
+		//get the uuid of the next direct block
+		uuid_copy(*dest, *src);
+
+		//if the block has not been created and so has a blank uuid then create a new uuid for it
+		if(UUID_IS_BLANK(*dest)) {
+
+			uuid_generate(*src);
+			uuid_copy(*dest, *src);
+
+		} else {
+
+			//get the data block from the file
+			fetchDataBlockFromUnqliteStore(dest, curr_block);
+
+		}
+
+		return 0;
+
+}
+
+//reads a single indirect block at the given source uuid and copies it into the destination uuid. If
+//it does not exist then we return -1 so that the read function knows to return the
+//number of bytes that have been read at this point since there is nothing left
+int getReadSingleIndirectBlock(single_indirect *indir_block, uuid_t *dest, uuid_t *src) {
+
+	//reset the block
+	memset(indir_block, 0, sizeof(single_indirect));
+
+	//try to copy the uuid of the block into the general single indirect block
+	uuid_copy(*dest, *src);
+
+	//if the uuid is blank then that means there is no more data to read and we return
+	//how much we have read
+	if(UUID_IS_BLANK(*dest)) {
+
+		write_log("myfs_read indirect block uuid not found");
+		return -1;
+
+	//otherwise, make a database call for the next indirect block
+	} else
+		fetchSingleIndirectBlockFromUnqliteStore(dest, indir_block);
+
+	return 0;
+}
+
+//reads a single indirect block at the given source uuid and copies it into the destination uuid. If
+//it does not exist then we generate a new uuid for the block
+int getWriteSingleIndirectBlock(single_indirect *indir_block, uuid_t *dest, uuid_t *src) {
+	
+	//reset the block
+	memset(indir_block, 0, sizeof(single_indirect));
+
+	//try to copy the uuid of the block into the general single indirect block
+	uuid_copy(*dest, *src);
+
+	//if the uuid is blank then create a new uuid for it and don't try to do any database fetches
+	if(UUID_IS_BLANK(*dest)) {
+		uuid_generate(*src);
+		uuid_copy(*dest, *src);
+
+	//if the uuid is not blank then make the copy from the database with the given uuid
+	} else
+		fetchSingleIndirectBlockFromUnqliteStore(dest, indir_block);
+
+	return 0;
+
 }
