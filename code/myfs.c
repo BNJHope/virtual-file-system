@@ -269,62 +269,216 @@ static int myfs_utime(const char *path, struct utimbuf *ubuf){
 static int myfs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi){
     write_log("myfs_write(path=\"%s\", buf=0x%08x, size=%d, offset=%lld, fi=0x%08x)\n", path, buf, size, offset, fi);
 
-	if(strcmp(path, the_root_fcb.path) != 0){
-		write_log("myfs_write - ENOENT");
-		return -ENOENT;
+    //the remaining size that we have to write
+    size_t remaining_size = size, size_to_write;
+
+    //the offsets for where the write starts in different blocks
+    int indir_block_offset, small_block_offset, interior_block_offset, size_read = 0, single_indirect_call_needed = 1;
+
+    //the file control block of the file that we are writing to.
+    file_node file_to_write;
+
+    //the uuid of where the file control block we found is in the store
+    uuid_t file_uuid, data_block_uuid, single_indirect_uuid;
+
+    //the data for the file we are writing to
+    reg_data file_data;
+
+    //the current block of data that we need
+    data_block curr_block;
+
+    //the current single indreict block that we need
+    single_indirect indir_block;
+
+    //if there was a problem locating the file then return ENOENT
+    if(getFileNode(path, &file_to_write, &file_uuid) != 0){
+    	write_log("myfs_write : error locating file %s\n", path);
+    	return -ENOENT;
     }
 
+    //if the size given to us was greater than the maximum file size then exit
 	if(size >= MY_MAX_FILE_SIZE){
 		write_log("myfs_write - EFBIG");
 		return -EFBIG;
 	}
 
-	uint8_t data_block[MY_MAX_FILE_SIZE];
+	//the data block to write to the file data
+	uint8_t data_block[MY_BLOCK_SIZE];
 
-	memset(&data_block, 0, MY_MAX_FILE_SIZE);
-	uuid_t *data_id = &(the_root_fcb.data_id);
-	// Is there a data block?
-	if(uuid_compare(zero_uuid,*data_id)==0){
-		// GEnerate a UUID fo rhte data blocl. We'll write the block itself later.
-		uuid_generate(the_root_fcb.data_id);
-	}else{
-		// First we will check the size of the obejct in the store to ensure that we won't overflow the buffer.
-		unqlite_int64 nBytes;  // Data length.
-		int rc = unqlite_kv_fetch(pDb,data_id,KEY_SIZE,NULL,&nBytes);
-		if( rc!=UNQLITE_OK || nBytes!=MY_MAX_FILE_SIZE){
-			write_log("myfs_write - EIO");
-			return -EIO;
+	//clear this data block by writing 0s to it all
+	memset(&data_block, 0, MY_BLOCK_SIZE);
+
+	//data id for the current block of memory
+	uuid_t data_id;
+
+	//set the data id to the data if of the file node
+	uuid_copy(data_id, file_to_write.data_id);
+
+	//clear the file data space
+	memset(&file_data, 0, sizeof(reg_data));
+
+	//if there is no uuid for the file's data block then generate a uuid for it
+	if(UUID_IS_BLANK(data_id)) {
+
+		uuid_generate(file_to_write.data_id);
+		uuid_copy(data_id, file_to_write.data_id);
+
+	//if the key does exist then copy everything into the file_data from the database
+	} else
+		fetchRegularFileDataFromUnqliteStore(&data_id, &file_data);
+
+	//get the various offset values needed
+	getOffsets(offset, &indir_block_offset, &small_block_offset, &interior_block_offset);
+
+	//while there is data still left to write
+	while(remaining_size != 0) {
+
+		//if the remaining size left will not fill the block
+		if(remaining_size < (MY_BLOCK_SIZE - interior_block_offset)) {
+			
+			//we write the remaining size to the block
+			size_to_write = remaining_size;
+			remaining_size = 0;
+
+		} else {
+
+			//set the size to write as the size of the rest of the block
+			//from the interior block offset
+			size_to_write = MY_BLOCK_SIZE - interior_block_offset;
+
+			//decrease the remaining size by the amount we need to write
+			remaining_size -= size_to_write;
 		}
 
-		// Fetch the data block from the store.
-		unqlite_kv_fetch(pDb,data_id,KEY_SIZE,&data_block,&nBytes);
-		// Error handling?
+		//clear the data block
+		memset(&curr_block, 0, sizeof(data_block));
+
+		//if we are in direct blocks only at this stage then try to fetch the direct block and write to it
+		if(indir_block_offset != - 1) {
+
+			//get the uuid of the next direct block
+			uuid_copy(data_block_uuid, file_data.direct_blocks[small_block_offset]);
+
+			//if the block has not been created and so has a blank uuid then create a new uuid for it
+			if(UUID_IS_BLANK(data_block_uuid)) {
+
+				uuid_generate(file_data.direct_blocks[small_block_offset]);
+				uuid_copy(data_block_uuid, file_data.direct_blocks[small_block_offset]);
+
+			} else {
+
+				//get the data block from the file
+				fetchDataBlockFromUnqliteStore(&data_block_uuid, &curr_block);
+
+			}
+
+			//write the new data to the structure and then subsequently to the database
+			memcpy(&curr_block.data[interior_block_offset], &buf[size_read], size_to_write);
+			storeDataBlockFromUnqliteStore(&data_block_uuid, &curr_block);
+
+			//if we have reached the end of the current indirect block then write it to the database and then
+			//increment
+			if(++interior_block_offset == MY_MAX_BLOCK_LIMIT) {
+				indir_block_offset++;
+				interior_block_offset = 0;
+				single_indirect_call_needed = 1;
+			}
+
+		//if we are using indirect blocks
+		} else {
+
+			//if we are either writing for the first time or we are currently not writing to a single
+			//indirect then create a new data space for it and make a key for it
+			if(single_indirect_call_needed == 1) {
+				memset(&indir_block, 0, sizeof(single_indirect));
+
+				uuid_copy(single_indirect_uuid, file_data.indirect_blocks[indir_block_offset]);
+
+					if(UUID_IS_BLANK(single_indirect_uuid)) {
+						uuid_generate(file_data.indirect_blocks[indir_block_offset]);
+						uuid_copy(single_indirect_uuid, file_data.indirect_blocks[indir_block_offset]);
+
+					} else {
+
+						fetchSingleIndirectBlockFromUnqliteStore(&single_indirect_uuid, &indir_block);
+
+					}
+
+				single_indirect_call_needed = 0;
+			}
+
+			//get the uuid of the next direct block
+			uuid_copy(data_block_uuid, indir_block.data_blocks[small_block_offset]);
+
+			//if the block has not been created and so has a blank uuid then create a new uuid for it
+			if(UUID_IS_BLANK(data_block_uuid)) {
+
+				uuid_generate(file_data.direct_blocks[small_block_offset]);
+				uuid_copy(data_block_uuid, file_data.direct_blocks[small_block_offset]);
+
+			} else {
+
+				//get the data block from the file
+				fetchDataBlockFromUnqliteStore(&data_block_uuid, &curr_block);
+
+			}
+
+			//if we have reached the end of the current indirect block then write it to the database and then
+			//increment
+			if(++interior_block_offset == MY_MAX_BLOCK_LIMIT) {
+				storeSingleIndirectBlockFromUnqliteStore(&single_indirect_uuid, &indir_block);
+				indir_block_offset++;
+				interior_block_offset = 0;
+				single_indirect_call_needed = 1;
+			}
+
+		}
+
 	}
+	
 
-	// Write the data in-memory.
-    int written = snprintf(data_block, MY_MAX_FILE_SIZE, buf);
+	// // Is there a data block?
+	// if(uuid_compare(zero_uuid,*data_id)==0){
+	// 	// GEnerate a UUID fo rhte data blocl. We'll write the block itself later.
+	// 	uuid_generate(the_root_fcb.data_id);
+	// }else{
+	// 	// First we will check the size of the obejct in the store to ensure that we won't overflow the buffer.
+	// 	unqlite_int64 nBytes;  // Data length.
+	// 	int rc = unqlite_kv_fetch(pDb,data_id,KEY_SIZE,NULL,&nBytes);
+	// 	if( rc!=UNQLITE_OK || nBytes!= MY_MAX_FILE_SIZE){
+	// 		write_log("myfs_write - EIO");
+	// 		return -EIO;
+	// 	}
 
-	// Write the data block to the store.
-	int rc = unqlite_kv_store(pDb,data_id,KEY_SIZE,&data_block,MY_MAX_FILE_SIZE);
-	if( rc != UNQLITE_OK ){
-		write_log("myfs_write - EIO");
-		return -EIO;
-	}
+	// 	// Fetch the data block from the store.
+	// 	unqlite_kv_fetch(pDb,data_id,KEY_SIZE,&data_block,&nBytes);
+	// 	// Error handling?
+	// }
 
-	// Update the fcb in-memory.
-	the_root_fcb.size=written;
-	time_t now = time(NULL);
-	the_root_fcb.mtime=now;
-	the_root_fcb.ctime=now;
+	// // Write the data in-memory.
+ //    int written = snprintf(data_block, MY_MAX_FILE_SIZE, buf);
 
-	// Write the fcb to the store.
-    rc = unqlite_kv_store(pDb,&(root_object.id),KEY_SIZE,&the_root_fcb,sizeof(file_node));
-	if( rc != UNQLITE_OK ){
-		write_log("myfs_write - EIO");
-		return -EIO;
-	}
+	// // Write the data block to the store.
+	// int rc = unqlite_kv_store(pDb,data_id,KEY_SIZE,&data_block,MY_MAX_FILE_SIZE);
+	// if( rc != UNQLITE_OK ){
+	// 	write_log("myfs_write - EIO");
+	// 	return -EIO;
+	// }
 
-    return written;
+	// // Update the fcb in-memory.
+	// the_root_fcb.size=written;
+	// time_t now = time(NULL);
+	// the_root_fcb.mtime=now;
+	// the_root_fcb.ctime=now;
+
+	// // Write the fcb to the store.
+ //    rc = unqlite_kv_store(pDb,&(root_object.id),KEY_SIZE,&the_root_fcb,sizeof(file_node));
+	// if( rc != UNQLITE_OK ){
+	// 	write_log("myfs_write - EIO");
+	// 	return -EIO;
+	// }
+
+    // return written;
 }
 
 // Set the size of a file.
@@ -680,6 +834,128 @@ int fetchDirectoryDataFromUnqliteStore(uuid_t *data_id, dir_data *buffer){
 	return 1;
 }
 
+
+int storeDirectoryDataFromUnqliteStore(uuid_t *key_id, dir_data *value_addr){
+
+		//store the directory data at the given address and record the result code
+		int rc = unqlite_kv_store(pDb,*key_id,KEY_SIZE,value_addr,sizeof(dir_data));
+		
+		if( rc != UNQLITE_OK ){
+   			error_handler(rc);
+		}
+}
+
+int fetchRegularFileDataFromUnqliteStore(uuid_t *data_id, reg_data *buffer){
+
+	//tracks the error message returned from when fetching from the unqlite
+	//datastore
+	int rc;
+
+	//number of bytes read back from the database
+	unqlite_int64 nBytes;  //Data length.
+
+	//this checks for errors before carrying out the fetch process
+	//by checking the unqlite return code and also that the number of
+	//bytes returned is the right number expected.
+	rc = unqlite_kv_fetch(pDb,*data_id,KEY_SIZE,NULL,&nBytes);
+	
+	if( rc != UNQLITE_OK ){
+	  error_handler(rc);
+	}
+	if(nBytes!=sizeof(reg_data)){
+		printf("Data object has unexpected size. Doing nothing.\n");
+		exit(-1);
+	}
+
+	unqlite_kv_fetch(pDb,data_id,KEY_SIZE,buffer,&nBytes);
+
+	return 1;
+}
+
+int storeRegularFileDataFromUnqliteStore(uuid_t *key_id, reg_data *value_addr){
+
+		//store the regulat filed data structure at the given address and record the result code
+		int rc = unqlite_kv_store(pDb,*key_id,KEY_SIZE,value_addr,sizeof(reg_data));
+		
+		if( rc != UNQLITE_OK ){
+   			error_handler(rc);
+		}
+}
+
+int fetchSingleIndirectBlockFromUnqliteStore(uuid_t *data_id, single_indirect *buffer){
+
+	//tracks the error message returned from when fetching from the unqlite
+	//datastore
+	int rc;
+
+	//number of bytes read back from the database
+	unqlite_int64 nBytes;  //Data length.
+
+	//this checks for errors before carrying out the fetch process
+	//by checking the unqlite return code and also that the number of
+	//bytes returned is the right number expected.
+	rc = unqlite_kv_fetch(pDb,*data_id,KEY_SIZE,NULL,&nBytes);
+	
+	if( rc != UNQLITE_OK ){
+	  error_handler(rc);
+	}
+	if(nBytes!=sizeof(single_indirect)){
+		printf("Data object has unexpected size. Doing nothing.\n");
+		exit(-1);
+	}
+
+	unqlite_kv_fetch(pDb,data_id,KEY_SIZE,buffer,&nBytes);
+
+	return 1;
+}
+
+int storeSingleIndirectBlockFromUnqliteStore(uuid_t *key_id, single_indirect *value_addr){
+
+		//store the single indirect at the given address and record the result code
+		int rc = unqlite_kv_store(pDb,*key_id,KEY_SIZE,value_addr,sizeof(single_indirect));
+		
+		if( rc != UNQLITE_OK ){
+   			error_handler(rc);
+		}
+}
+
+int fetchDataBlockFromUnqliteStore(uuid_t *data_id, data_block *buffer){
+
+	//tracks the error message returned from when fetching from the unqlite
+	//datastore
+	int rc;
+
+	//number of bytes read back from the database
+	unqlite_int64 nBytes;  //Data length.
+
+	//this checks for errors before carrying out the fetch process
+	//by checking the unqlite return code and also that the number of
+	//bytes returned is the right number expected.
+	rc = unqlite_kv_fetch(pDb,*data_id,KEY_SIZE,NULL,&nBytes);
+	
+	if( rc != UNQLITE_OK ){
+	  error_handler(rc);
+	}
+	if(nBytes!=sizeof(data_block)){
+		printf("Data object has unexpected size. Doing nothing.\n");
+		exit(-1);
+	}
+
+	unqlite_kv_fetch(pDb,data_id,KEY_SIZE,buffer,&nBytes);
+
+	return 1;
+}
+
+int storeDataBlockFromUnqliteStore(uuid_t *key_id, data_block *value_addr){
+
+		//store the data block at the given address and record the result code
+		int rc = unqlite_kv_store(pDb,*key_id,KEY_SIZE,value_addr,sizeof(data_block));
+		
+		if( rc != UNQLITE_OK ){
+   			error_handler(rc);
+		}
+}
+
 int fillStatWithFileNode(struct stat* destination, file_node* source){
 
 	write_log("Source path : %s\n", source->path);
@@ -700,15 +976,6 @@ int fillStatWithFileNode(struct stat* destination, file_node* source){
 	return 0;
 }
 
-int storeDirectoryDataFromUnqliteStore(uuid_t *key_id, dir_data *value_addr){
-
-		//store the directory data at the given address and record the result code
-		int rc = unqlite_kv_store(pDb,*key_id,KEY_SIZE,value_addr,sizeof(dir_data));
-		
-		if( rc != UNQLITE_OK ){
-   			error_handler(rc);
-		}
-}
 
 int initNewFCB(const char* path, file_node* buff){
 
@@ -918,4 +1185,33 @@ int makePDdirent(uuid_t *pdId, dir_data *newDirData){
 
 	memcpy(&newDirData->entries[1], &pdDirent, sizeof(dir_entry));
 
+}
+
+int getOffsets(off_t offset, int *indir_block_offset, int *small_block_offset, int *interior_block_offset) {
+
+	//if the offset starts after the end of the direct blocks
+	if(offset > MY_DIRECT_BLOCKS_SIZE) {
+		//determines which indirect block we need
+		*indir_block_offset = (offset - MY_DIRECT_BLOCKS_SIZE) / MY_SINGLE_INDIRECT_BLOCK_SIZE;
+
+		//determines which block in the direct block we start
+		*small_block_offset = (offset - MY_DIRECT_BLOCKS_SIZE - (indir_block_offset * MY_SINGLE_INDIRECT_BLOCK_SIZE)) / MY_BLOCK_SIZE;
+
+		//where in the block of memory we start writing
+		*interior_block_offset = (offset - MY_DIRECT_BLOCKS_SIZE - (indir_block_offset * MY_SINGLE_INDIRECT_BLOCK_SIZE) - (small_block_offset * MY_BLOCK_SIZE));
+
+	} else {
+
+		//no indirect blocks yet so we set this to -1
+		*indir_block_offset = -1;
+
+		//determines which direct block we are starting from
+		*small_block_offset = offset / MY_BLOCK_SIZE;
+
+		//get where we need to start inside of the data block
+		*interior_block_offset = offset - (MY_BLOCK_SIZE * small_block_offset);
+
+	}
+
+	return 0;
 }

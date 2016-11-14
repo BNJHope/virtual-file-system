@@ -5,16 +5,19 @@
 
 #define MY_MAX_FILENAME FILENAME_MAX
 #define MY_MAX_PATH PATH_MAX
-#define MY_MAX_FILE_SIZE 1000
 #define MY_MAX_DIRECTORY_SIZE 256
 #define MY_MAX_BLOCK_LIMIT 12
 #define MY_BLOCK_SIZE 64
+#define MY_SINGLE_INDIRECT_BLOCK_SIZE (MY_MAX_BLOCK_LIMIT * MY_BLOCK_SIZE)
+#define MY_DIRECT_BLOCKS_SIZE (MY_BLOCK_SIZE * MY_MAX_BLOCK_LIMIT)
+#define MY_INDIRECT_BLOCKS_SIZE (MY_MAX_BLOCK_LIMIT * MY_SINGLE_INDIRECT_BLOCK_SIZE)
+#define MY_MAX_FILE_SIZE (MY_DIRECT_BLOCKS_SIZE + MY_INDIRECT_BLOCKS_SIZE)
 #define TRUE 1
 #define FALSE 0
 #define IS_DIR(mode) (!(S_ISREG(mode)))
 #define ROOT_NAME "/"
 #define IS_ROOT(path) ((strcmp(path, ROOT_NAME)) == 0)
-
+#define UUID_IS_BLANK(uuidToCheck) (uuid_compare(zero_uuid, uuidToCheck) == 0)
 typedef struct {
 
 	//the file name
@@ -54,22 +57,22 @@ typedef struct {
 
 } data_block;
 
-//a colleciton of data blocks used
+//a colleciton of data blocks
 typedef struct {
 
 	//array of data blocks
-	data_block data_blocks[MY_MAX_BLOCK_LIMIT];
+	uuid_t data_blocks[MY_MAX_BLOCK_LIMIT];
 
-} data_collection;
+} single_indirect;
 
 //data structure for a regular file data
 typedef struct {
 
 	//array of direct file blocks
-	data_block direct_blocks[MY_MAX_BLOCK_LIMIT];
+	uuid_t direct_blocks[MY_MAX_BLOCK_LIMIT];
 
 	//array of indirect blocks for the 
-	data_collection indirect_blocks[MY_MAX_BLOCK_LIMIT];
+	uuid_t indirect_blocks[MY_MAX_BLOCK_LIMIT];
 
 } reg_data;
 
@@ -124,3 +127,9 @@ int getParentFileNode(const char* path, file_node *buffer, uuid_t* buff_uuid);
 int makeDirent(char* filename, file_node *parentNode, dir_entry *dirent, dir_data *dirdata);
 int makeCWDdirent(uuid_t *cwdId, dir_data *newDirData);
 int makePDdirent(uuid_t *pdId, dir_data *newDirData);
+int getOffsets(off_t offset, int *indir_block_offset, int *small_block_offset, int *interior_block_offset);
+int fetchRegularFileDataFromUnqliteStore(uuid_t *data_id, reg_data *buffer);
+int fetchSingleIndirectBlockFromUnqliteStore(uuid_t *data_id, single_indirect *buffer);
+int storeSingleIndirectBlockFromUnqliteStore(uuid_t *key_id, single_indirect *value_addr);
+int fetchDataBlockFromUnqliteStore(uuid_t *data_id, data_block *buffer);
+int storeDataBlockFromUnqliteStore(uuid_t *key_id, data_block *value_addr);
