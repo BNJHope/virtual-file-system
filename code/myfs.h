@@ -18,7 +18,7 @@
 #define MY_MAX_BLOCK_LIMIT 12
 
 //the number of bytes that are being stored in every file block
-#define MY_BLOCK_SIZE 8
+#define MY_BLOCK_SIZE 4096
 
 //defines the size in bytes of a single indirect block
 #define MY_SINGLE_INDIRECT_BLOCK_SIZE (MY_MAX_BLOCK_LIMIT * MY_BLOCK_SIZE)
@@ -126,6 +126,12 @@ typedef struct {
 
 //collection of key value maps that the directory holds
 typedef struct {
+
+	//the list of free slots in this directory data
+	int free_slots[MY_MAX_DIRECTORY_SIZE];
+
+	//the number of free slots in the array
+	int numberOfFreeSlots;
 
 	//array of directory entries
 	dir_entry entries[MY_MAX_DIRECTORY_SIZE];
@@ -239,3 +245,12 @@ int getReadSingleIndirectBlock(single_indirect *indir_block, uuid_t *dest, uuid_
 //reads a single indirect block at the given source uuid and copies it into the destination uuid. If
 //it does not exist then we generate a new uuid for the block
 int getWriteSingleIndirectBlock(single_indirect *indir_block, uuid_t *dest, uuid_t *src);
+
+//removes the directory entry of the file at the given path from the parent node.
+int removeDirent(const char* path, file_node *parent_node);
+
+//check whether the given index is in the free list or not
+int entryIsInFreeList(dir_data *parent_data, int *entryToSearchFor);
+
+//checks if there is a free space in the free list and returns it. Otherwise, returns -1
+int freeSpaceInList(dir_data *directData);

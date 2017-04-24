@@ -1,3 +1,4 @@
+USER=bh59
 SCRATCH_DIR=/cs/scratch/${USER}
 echo "===START - Testing $1==="
 make clean

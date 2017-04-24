@@ -105,6 +105,7 @@ static int myfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off
 	//to the size of the root directory minus 2 so that it
 	//remembers to ignore those two directories
 	if(IS_ROOT(fnode.path)){
+
 		//get the number of files in the directory
 		size = fnode.size - 2;
 		filler(buf, CWD_STR, NULL, 0);
@@ -116,15 +117,22 @@ static int myfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off
 	//get the list of directory entries
 	entries = dirdata.entries;
 
+	int stepper = 0, limit = 0;
 	//carry out the filler function on every file in the directory
-	for(int i = 0; i < size; i++) {
-		dirent = *entries;
-		filler(buf, dirent.path, NULL, 0);
-		entries++;
+	while(limit < size) {
+
+		if(entryIsInFreeList(&dirdata, &stepper) == -1) {
+			dirent = entries[stepper];
+			filler(buf, dirent.path, NULL, 0);
+			limit++;
+		}
+
+		stepper++;
 	}
 
-	//reset the pointer
-	entries -= size;
+
+	// //reset the pointer
+	// entries -= size;
 
 	return 0;
 }
@@ -228,10 +236,12 @@ static int myfs_read(const char *path, char *buf, size_t size, off_t offset, str
 			//increment
 			if(++small_block_offset == MY_MAX_BLOCK_LIMIT) {
 				indir_block_offset++;
-				interior_block_offset = 0;
 				small_block_offset = 0;
 				single_indirect_call_needed = 1;
 			}
+
+			//reset the data block index back to the start
+			interior_block_offset = 0;
 
 		//if we are using indirect blocks
 		} else {
@@ -265,7 +275,6 @@ static int myfs_read(const char *path, char *buf, size_t size, off_t offset, str
 			if(++small_block_offset == MY_MAX_BLOCK_LIMIT) {
 				storeSingleIndirectBlockFromUnqliteStore(&single_indirect_uuid, &indir_block);
 				indir_block_offset++;
-				interior_block_offset = 0;
 				small_block_offset = 0;
 
 				//set this flag to one so that we know that we have to make another data base call for
@@ -273,8 +282,13 @@ static int myfs_read(const char *path, char *buf, size_t size, off_t offset, str
 				single_indirect_call_needed = 1;
 			}
 
+			//reset the data block index back to the start
+			interior_block_offset = 0;
+
 		}
 
+		//increment the size that we have written to the file by the amount that was read in from
+		//the buffer to read
 		size_written += size_to_read;
 	}
 
@@ -485,9 +499,11 @@ static int myfs_write(const char *path, const char *buf, size_t size, off_t offs
 			if(++small_block_offset == MY_MAX_BLOCK_LIMIT) {
 				indir_block_offset++;
 				small_block_offset = 0;
-				interior_block_offset = 0;
 				single_indirect_call_needed = 1;
 			}
+
+			//reset the data block index back to the start
+			interior_block_offset = 0;
 
 		//if we are using indirect blocks
 		} else {
@@ -514,28 +530,35 @@ static int myfs_write(const char *path, const char *buf, size_t size, off_t offs
 				storeSingleIndirectBlockFromUnqliteStore(&single_indirect_uuid, &indir_block);
 				indir_block_offset++;
 				small_block_offset = 0;
-				interior_block_offset = 0;
 				single_indirect_call_needed = 1;
 			}
 
+			//reset the data block index back to the start
+			interior_block_offset = 0;
+
 		}
 
+		//increment the size that we have read in from the buffer to write
+		//by how much we wrote to the file
 		size_read += size_to_write;
 	}
 
+	//store the last data block and single indirect block that we used
 	storeDataBlockFromUnqliteStore(&data_block_uuid, &curr_block);
 	storeSingleIndirectBlockFromUnqliteStore(&single_indirect_uuid, &indir_block);
 
+	//if the file increased by size in this write then change the size
+	//of the file size in the meta data
 	if(file_to_write.size < offset + size)
 		file_to_write.size = offset + size;
 
+	//store the file's data and file control block in the file store
 	storeRegularFileDataFromUnqliteStore(&file_to_write.data_id, &file_data);
 	storeFCBInUnqliteStore(&file_uuid, &file_to_write);
 
 	write_log("myfs writing to uuid : %s\n", file_uuid);
 
 	return size_read;
-
 }
 
 // Set the size of a file.
@@ -629,6 +652,17 @@ int myfs_truncate(const char *path, off_t newsize){
 int myfs_chmod(const char *path, mode_t mode){
     write_log("myfs_chmod(fpath=\"%s\", mode=0%03o)\n", path, mode);
 
+    file_node fcb;
+    memset(&fcb, 0, sizeof(file_node));
+    uuid_t fcbid;
+
+    if(getFileNode(path, &fcb, &fcbid) == -ENOENT)
+    	return -ENOENT;
+
+    fcb.mode = mode;
+
+	storeFCBInUnqliteStore(&fcbid, &fcb);
+
     return 0;
 }
 
@@ -636,6 +670,18 @@ int myfs_chmod(const char *path, mode_t mode){
 // Read 'man 2 chown'.
 int myfs_chown(const char *path, uid_t uid, gid_t gid){
     write_log("myfs_chown(path=\"%s\", uid=%d, gid=%d)\n", path, uid, gid);
+
+    file_node fcb;
+    memset(&fcb, 0, sizeof(file_node));
+    uuid_t fcbid;
+
+    if(getFileNode(path, &fcb, &fcbid) == -ENOENT)
+    	return -ENOENT;
+
+    fcb.uid = uid;
+    fcb.gid = gid;
+
+    storeFCBInUnqliteStore(&fcbid, &fcb);
 
     return 0;
 }
@@ -734,7 +780,31 @@ int myfs_mkdir(const char *path, mode_t mode){
 // Delete a file.
 // Read 'man 2 unlink'.
 int myfs_unlink(const char *path){
+	
 	write_log("myfs_unlink: %s\n",path);
+
+	//the parent directory of the file that we are trying to delete
+	file_node parent;
+
+	//the uuid of where the fcb of the parent is stored in the database
+	uuid_t parentId;
+
+	//reset the parent node before filling it with the data from the
+	//get parent function
+	memset(&parent, 0, sizeof(file_node));
+	getParentFileNode(path, &parent, &parentId);
+
+	//remove the directory entry given in the path from the parent directory. Return
+	//-ENOENT if the directory is not found
+	if(removeDirent(path, &parent) == -ENOENT) {
+		return -ENOENT;
+	}
+
+	//decrease the size of the parent by 1
+	parent.size--;
+
+	//store the parent at its id in the store
+	storeFCBInUnqliteStore(&parentId, &parent);
 
     return 0;
 }
@@ -743,6 +813,29 @@ int myfs_unlink(const char *path){
 // Read 'man 2 rmdir'.
 int myfs_rmdir(const char *path){
     write_log("myfs_rmdir: %s\n",path);
+
+	//the parent directory of the file that we are trying to delete
+	file_node parent;
+
+	//the uuid of where the fcb of the parent is stored in the database
+	uuid_t parentId;
+
+	//reset the parent node before filling it with the data from the
+	//get parent function
+	memset(&parent, 0, sizeof(file_node));
+	getParentFileNode(path, &parent, &parentId);
+
+	//remove the directory entry given in the path from the parent directory. Return
+	//-ENOENT if the directory is not found
+	if(removeDirent(path, &parent) == -ENOENT) {
+		return -ENOENT;
+	}
+
+	//decrease the size of the parent by 1
+	parent.size--;
+
+	//store the parent at its id in the store
+	storeFCBInUnqliteStore(&parentId, &parent);
 
     return 0;
 }
@@ -791,6 +884,10 @@ static struct fuse_operations myfs_oper = {
 	.flush		= myfs_flush,
 	.release	= myfs_release,
 	.mkdir 		= myfs_mkdir,
+	.rmdir = myfs_rmdir,
+	.unlink = myfs_unlink,
+	.chmod = myfs_chmod,
+	.chown = myfs_chown,
 };
 
 
@@ -1301,6 +1398,8 @@ int getParentFileNode(const char* path, file_node *buffer, uuid_t* buff_uuid){
 	//get the file control block and the uuid of the parent
 	getFileNode(parentPath, buffer, buff_uuid);
 
+	return 0;
+
 }
 
 //create a direct entry to link the file name with the given parent node and return it
@@ -1320,16 +1419,23 @@ int makeDirent(char* filename, file_node *parentNode, dir_entry *dirent, dir_dat
 
 	//the index of where the new entry will go in the array of directory entries
 	//in the directory data
-	int new_entry_position;
+	int new_entry_position, freeSpace;
 
 	//if the parent is the root then set the new entry position without consideration
 	//for "." and ".." since we have not stored these in the root directory, and increment
 	//the size of the root file control block. Otherwise set the new entry position as the
 	//size of the parent node
 	if(IS_ROOT(parentNode->path)) {
-		new_entry_position = parentNode->size - 2;
+		if((freeSpace = freeSpaceInList(dirdata)) == -1) 
+			new_entry_position = parentNode->size - 2;
+		else
+			new_entry_position = freeSpace - 2;
 		the_root_fcb.size++;
 	} else {
+		if((freeSpace = freeSpaceInList(dirdata)) == -1) 
+			new_entry_position = parentNode->size;
+		else
+			new_entry_position = freeSpace;
 		new_entry_position = parentNode->size;
 	}
 
@@ -1339,6 +1445,8 @@ int makeDirent(char* filename, file_node *parentNode, dir_entry *dirent, dir_dat
 
 	//increment the size kept by the parent node
 	parentNode->size++;
+
+	return 0;
 
 }
 
@@ -1352,6 +1460,8 @@ int makeCWDdirent(uuid_t *cwdId, dir_data *newDirData){
 
 	memcpy(&newDirData->entries[0], &cwdDirent, sizeof(dir_entry));
 
+	return 0;
+
 }
 
 int makePDdirent(uuid_t *pdId, dir_data *newDirData){
@@ -1364,6 +1474,7 @@ int makePDdirent(uuid_t *pdId, dir_data *newDirData){
 
 	memcpy(&newDirData->entries[1], &pdDirent, sizeof(dir_entry));
 
+	return 0;
 }
 
 //get the offsets needed for the indirect block, direct block and interior character in the data buffer from
@@ -1515,4 +1626,130 @@ int getWriteSingleIndirectBlock(single_indirect *indir_block, uuid_t *dest, uuid
 
 	return 0;
 
+}
+
+//removes the directory entry of the file at the given path from the parent node.
+int removeDirent(const char* path, file_node *parent_node){
+
+	//the return code from the database call,
+	//a stepper for the search for the file,
+	//the limit for how many non empty items we have found
+	//the size of the path of the file we are deleting,
+	//the size we are checking
+	//and the flag for when we find the entry to delete
+	int rc, stepper = 0, limit = 0, path_size = strlen(path), size, entryFound = 0;
+
+	//buff to load the path into so that we can
+	//perform the basename function on the path
+	char pathBuff[path_size];
+
+	//the directory data of the parent directory
+	dir_data parent_data;
+
+	//the current directory entry that we are checking
+	dir_entry curr_entry;
+
+	//copy the const char* path into the pathBuff array
+	sprintf(pathBuff, path);
+
+	//the name of the file, which is how the file at the given path is represented
+	//in the directory
+	char* filename = basename(pathBuff);
+
+	//reset all of the bits of the directory data structure and then
+	//fill that space with the directory data fetched from the database
+	memset(&parent_data, 0, sizeof(dir_data));
+
+	//try to get the directory data of the parent node from the UnQlite store
+	if((rc = fetchDirectoryDataFromUnqliteStore(&parent_node->data_id, &parent_data)) != 0)
+		return rc;
+
+	//get the size needed for the search
+	if(IS_ROOT(parent_node->path))
+		size = parent_node->size - 2;
+	else
+		size = parent_node->size;
+
+	//reset the curr_entry
+	memset(&curr_entry, 0, sizeof(dir_entry));
+
+	//while there are still entries in the parent directory data
+	while(limit < size && entryFound == 0) {
+
+		//the current entry is at the stepper location in the directory data's
+		//entries list
+		curr_entry = parent_data.entries[stepper];
+
+		//if the path of the entry we are checking matches the name
+		//of the file we are deleting then exit the loop. Otherwise,
+		//keep searching
+		if(strcmp(curr_entry.path, filename) == 0)
+			entryFound = 1;
+		//if the entry is not in the free list then we can increase the limit counter
+		//as we know it means that the slot that we checked is not empty
+		else if(entryIsInFreeList(&parent_data, &stepper) == -1)
+			limit++;
+
+		stepper++;
+	}
+
+	//if an entry was found then delete it
+	if(entryFound == 1) {
+		parent_data.free_slots[parent_data.numberOfFreeSlots++] = stepper;
+		memset(&parent_data.entries[stepper], 0, sizeof(dir_entry));
+	//otherwise return ENOENT
+	} else {
+		write_log("failed to delete %s : entry not found in parent directory\n", path);
+		return -ENOENT;
+	}
+
+
+	return 0;
+
+}
+
+//check whether the given index is in the free list or not
+int entryIsInFreeList(dir_data *parent_data, int *entryToSearchFor) {
+
+	int stepper = 0, entryFound = -1, currentEntry = 0, limit = 0;
+
+	while(limit < parent_data->numberOfFreeSlots && entryFound == 0) {
+		if((currentEntry = parent_data->free_slots[stepper]) == *entryToSearchFor)
+			entryFound = 1;
+		else if(currentEntry != -1) {
+			limit++;
+		}
+		stepper++;
+	}
+
+	return entryFound;
+}
+
+//checks if there is a free space in the free list and returns it. Otherwise, returns -1
+int freeSpaceInList(dir_data *directData) {
+
+	int stepper = 0, slotFound = 0, currentSlot,  result = 0;
+
+	if(directData->numberOfFreeSlots == 0) {
+
+		return -1;
+
+	} else {
+
+		while(stepper < directData->numberOfFreeSlots && slotFound == 0) {
+
+		if((currentSlot = directData->free_slots[stepper]) != -1) {
+			slotFound = 1;
+			result = currentSlot;
+			directData->free_slots[stepper] = -1;
+			directData->numberOfFreeSlots--;
+		}
+
+		stepper++;
+
+		}
+
+	}
+
+	return result;
 }
